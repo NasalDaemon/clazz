@@ -25,7 +25,7 @@ The future is here. Get out of economy and into first clazz. You still have to d
 5. [Interop with existing vanilla classes, structural extraction of fields by name](#greatest-hits-interop)
 6. [Runtime polymorphism without vtables or std::visit (runtime polymorphism which can be inlined)](#greatest-hits-rt-poly)
 
-### 1. Inline class definitions<a name="greatest-hits-inline-definitions"></a>
+### 1. <a name="greatest-hits-inline-definitions"></a>Inline class definitions
 ```c++
 clazz<var first_name<std::string>, var last_name<std::string>> name() {
   return {"John", "Smith"};
@@ -37,7 +37,7 @@ auto n2 = clazz{set last_name = "Smith"s, set first_name = "John"s};
 cout << n1.first_name << " " << n1.last_name << '\n'; // John Smith
 cout << n2.first_name << " " << n2.last_name << '\n'; // John Smith
 ```
-### 2. Structural comparison of clazzes by field names, objective strict total ordering for all conceivable clazzes<a name="greatest-hits-comparison"></a>
+### 2. <a name="greatest-hits-comparison"></a>Structural comparison of clazzes by field names, objective strict total ordering for all conceivable clazzes
 ```c++
 using A   = clazz<var a<int>>;
 using C   = clazz<var c<int>>;
@@ -69,7 +69,7 @@ assert(BA{99, 1} < AC{0, 2}); // Value of shared field a is equal, both have sam
 // no comparison of field values, as none are shared
 assert(A{1} < C{1}); // No shared fields, but field names a < c
 ```
-### 3. Unordered designated initialisation<a name="greatest-hits-desi-ini"></a>
+### 3. <a name="greatest-hits-desi-ini"></a>Unordered designated initialisation
 ```c++
 // Using deduction guides
 auto amount1 = clazz{set amount = 1, set currency = "GBP"sv}; // {amount: 1, currency: "GBP"}
@@ -109,7 +109,7 @@ assert(amount1 != amountHHH && amountGBP != amountHHH); // 1 GBP != 1 HHH
 assert(amountHHH != ammountYYY);
 
 ```
-### 4. Named tuples (aka indexed clazzes), interop with existing std::tuple, structured bindings<a name="greatest-hits-nuple"></a>
+### 4. <a name="greatest-hits-nuple"></a>Named tuples (aka indexed clazzes), interop with existing std::tuple, structured bindings
 ```c++
 // Fields are named _i where i is 1, ..., 22
 auto n1 = nuple{2, 5, 8}; // nuple<int, int> {_1: 2, _2: 5, _3: 8}
@@ -133,7 +133,7 @@ assert(a1 == n1._1 && b1 == n1._2 && c1 == n1._3);
 auto [a2, b2, c2] = n1;
 assert(a2 == n1._1 && b2 == n1._2 && c2 == n1._3);
 ```
-### 5. Interop with existing vanilla classes, structural extraction of fields by name<a name="greatest-hits-interop"></a>
+### 5. <a name="greatest-hits-interop"></a>Interop with existing vanilla classes, structural extraction of fields by name
 ```c++
 struct {
     int a = 0, b = 1;
@@ -151,7 +151,7 @@ auto abc1 = make_clazz<tag a, tag b, tag c>(anon_abc); // {a: 0, b: 1, c: 2}
 auto abc2 = ABC{anon_abc}; // {a: 0, b: 1, c: 2}
 auto abc3 = get_abc{anon_ab}; // {a: 0, b: 1, c: 9} c is missing from anon_ab, but default value of c in ABC is 9
 ```
-### 6. Runtime polymorphism without vtables or std::visit (runtime polymorphism which can be inlined)<a name="greatest-hits-rt-poly"></a>
+### 6. <a name="greatest-hits-rt-poly"></a>Runtime polymorphism without vtables or std::visit (runtime polymorphism which can be inlined)
 ```c++
 using printable = trait<dec print<void() const>>;
 
