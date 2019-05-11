@@ -20,6 +20,30 @@ constexpr To union_cast(From&& in) noexcept {
     return reinterpret_cast<To>(in);
 }
 
+// https://stackoverflow.com/questions/35941045/can-i-obtain-c-type-names-in-a-constexpr-way/35943472#35943472
+template<class T>
+constexpr auto type_name() {
+    char const* p = __PRETTY_FUNCTION__;
+    while (*p++ != '=');
+    for (; *p == ' '; ++p);
+    char const* p2 = p;
+    int count = 1;
+    for (;;++p2)
+    {
+        switch (*p2)
+        {
+        case '[':
+            ++count;
+            break;
+        case ']':
+            --count;
+            if (!count)
+                return std::string_view{p, std::size_t(p2 - p)};
+        }
+    }
+    return std::string_view{};
+}
+
 enum class symbol_type {
     invalid,
     var, 
@@ -129,6 +153,16 @@ struct tag_info {
 template<class T>
 concept bool Tag = tag_info<T>::is_tag;
 
+template<Tag... Tags>
+struct tags_info {
+    static constexpr size_t size = sizeof...(Tags);
+    static constexpr bool empty = size == 0;
+
+    // TODO, use array instead of tuple, when more std::array operations are constexpr P0202R3
+    static constexpr auto names_array = std::tuple{tag_info<Tags>::name...};
+    static constexpr auto names_array_array = std::array{tag_info<Tags>::name...};
+};
+
 template<class S, class N>
 concept bool SymbolNamed = Symbol<S> && Tag<N> && symbol_info<S>::template has_name<N>;
 
@@ -170,6 +204,27 @@ struct is_clazz<clazz<Ts...>> : std::true_type {};
 
 template<class T>
 concept bool Clazz = is_clazz<std::decay_t<T>>::value;
+
+template<class>
+struct is_tuple : std::false_type {};
+
+template<class... Ts>
+struct is_tuple<std::tuple<Ts...>> : std::true_type {};
+
+template<class T>
+concept bool Tuple = is_tuple<std::decay_t<T>>::value;
+
+template<class>
+struct is_named_tuple : std::false_type {};
+
+template<template<class> class>
+struct is_named_tuple_wrapper : std::false_type {};
+
+template<class T>
+concept bool NamedTuple = is_named_tuple<std::decay_t<T>>::value;
+
+template<template<class> class W>
+concept bool NamedTupleWrapper = is_named_tuple_wrapper<W>::value;
 
 template<Clazz T>
 using meta_clazz_t = typename std::decay_t<T>::meta_clazz_t;
@@ -463,7 +518,7 @@ struct index_of_type<T, T, Ts...> {
 
 template<class T, class... Ts>
 struct is_one_of {
-    static constexpr bool value = (std::is_same_v<T, Ts...> || ...);
+    static constexpr bool value = (std::is_same_v<T, Ts> || ...);
 };
 
 template<template<class> class W1, template<class> class W2>
@@ -784,9 +839,10 @@ using make_clazz_t = typename make_meta_clazz_t<name_wrapper, X...>::clazz_t;
 
 #define DECLARE_NAMED_TUPLE_VAR_WRAPPER(struple_symbol) \
     namespace struple_symbols { template<size_t I, class T> struct struple_symbol { using type = void; }; }
-    
+
 #define DECLARE_NAMED_TUPLE_OR_META_CLAZZ(tuple_name, clazz_or_meta_clazz) \
     DECLARE_NAMED_TUPLE_VAR_WRAPPER(tuple_name);\
+    /* Unfortunately, both an alias and concrete type are needed for deduction guides */\
     template<class... X>\
     using tuple_name ## _t = make_ ## clazz_or_meta_clazz ## _t<struple_symbols::tuple_name, X...>;\
     template<class... X>\
@@ -796,8 +852,15 @@ using make_clazz_t = typename make_meta_clazz_t<name_wrapper, X...>::clazz_t;
         template<class... Ts>\
         constexpr tuple_name(Ts&&... in) noexcept : type(std::forward<Ts>(in)...) {}\
     };\
+    template<class... X>\
+    struct is_named_tuple<tuple_name<X...>> : std::true_type {};\
+    template<>\
+    struct is_named_tuple_wrapper<tuple_name> : std::true_type {};\
+    /* Deduction guides only possible on concrete classes, and not on aliases */\
     template<class... Ts>\
-    tuple_name(Ts...) -> tuple_name<Ts...>
+    tuple_name(Ts...) -> tuple_name<Ts...>;\
+    template<class... Ts>\
+    tuple_name(std::tuple<Ts...>) -> tuple_name<Ts...>;
     
 #define DECLARE_NAMED_META_CLAZZ(tuple_name) DECLARE_NAMED_TUPLE_OR_META_CLAZZ(tuple_name, meta_clazz)
 #define DECLARE_NAMED_TUPLE(tuple_name) DECLARE_NAMED_TUPLE_OR_META_CLAZZ(tuple_name, clazz)
@@ -1455,11 +1518,11 @@ constexpr inline auto get(C&& c) noexcept {
     return clazz_t(std::forward<C>(c));
 }
 
-// Get a super clazz by tags
-template<Tag... tags, Clazz C>
-requires sizeof...(tags) > 1
+// Get a super clazz by Tags
+template<Tag... Tags, Clazz C>
+requires sizeof...(Tags) > 1
 constexpr inline auto get(C&& c) noexcept {
-    using clazz_t = clazz<typename meta_values_t<C>::template tag_symbol_t<tags>...>;
+    using clazz_t = clazz<typename meta_values_t<C>::template tag_symbol_t<Tags>...>;
     return clazz_t(std::forward<C>(c));
 }
 
@@ -1477,15 +1540,15 @@ constexpr inline auto tie(C&& c) noexcept {
     return clazz_t(std::forward<C>(c));
 }
 
-// Tie a super clazz by tags
-template<Tag... tags, Clazz C>
-requires sizeof...(tags) > 1
+// Tie a super clazz by Tags
+template<Tag... Tags, Clazz C>
+requires sizeof...(Tags) > 1 && (meta_clazz_t<C>::template has_tag<Tags> && ...)
 constexpr inline auto tie(C&& c) noexcept {
     using clazz_t = clazz<
         std::conditional_t<
-            StaticValue<typename meta_values_t<C>::template tag_symbol_t<tags>>, 
-            typename meta_values_t<C>::template tag_symbol_t<tags>,
-            typename tag_info<tags>::template var_t<decltype(get<tags>(std::forward<C>(c)))>
+            StaticValue<typename meta_values_t<C>::template tag_symbol_t<Tags>>, 
+            typename meta_values_t<C>::template tag_symbol_t<Tags>,
+            typename tag_info<Tags>::template var_t<decltype(get<Tags>(std::forward<C>(c)))>
         >...
     >;
     return clazz_t(std::forward<C>(c));
@@ -1506,7 +1569,86 @@ constexpr inline decltype(auto) get_or(C&& c, T&&) noexcept {
 }
 
 template<Symbol... X>
-struct meta_clazz {
+struct symbols_info {
+    static constexpr size_t size = sizeof...(X);
+
+    template<Symbol S>
+    static constexpr bool has_symbol = (symbol_info<X>::template shares_dec<S> || ...);
+    
+    template<class Struct>
+    static constexpr bool importable = ((EmptySymbol<X> || tag_info<symbol_tag_t<X>>::template has_mem_var<std::decay_t<Struct>>) && ...);
+
+    template<Declaration D>
+    static constexpr bool has_dec = (symbol_info<X>::template has_dec<D> || ...);
+    
+    template<Declaration... Decs>
+    static constexpr bool implements = (has_dec<Decs> && ...);
+    
+    template<Symbol S>
+    static constexpr bool has_dec_of = (symbol_info<X>::template shares_dec<S> || ...);
+
+    template<Symbol... S>
+    static constexpr bool implements_of = (has_dec_of<S> && ...);
+
+    template<Declaration D>
+    static constexpr bool has_co_dec = (symbol_info<X>::template has_wider_dec<D> || ...);
+    
+    template<Declaration... Decs>
+    static constexpr bool co_implements = (has_co_dec<Decs> && ...);
+
+    template<Symbol S>
+    static constexpr bool has_co_dec_of = (symbol_info<X>::template shares_wider_dec<S> || ...);
+
+    template<Symbol... S>
+    static constexpr bool co_implements_of = (has_co_dec_of<S> && ...);
+
+    template<Declaration D>
+    static constexpr bool has_contra_dec = (symbol_info<X>::template has_narrower_dec<D> || ...);
+    
+    template<Declaration... Decs>
+    static constexpr bool contra_implements = (has_contra_dec<Decs> && ...);
+
+    template<Symbol S>
+    static constexpr bool has_contra_dec_of = (symbol_info<X>::template shares_narrower_dec<S> || ...);
+
+    template<Symbol... S>
+    static constexpr bool contra_implements_of = (has_contra_dec_of<S> && ...);
+
+    template<Tag tag>
+    using tag_symbol_t = std::tuple_element_t<index_of<tag, X...>::value, std::tuple<X...>>;
+
+    template<size_t I>
+    using index_symbol_t = std::tuple_element_t<I, std::tuple<X...>>;
+
+    template<size_t I>
+    using index_element_t = typename symbol_info<index_symbol_t<I>>::value_t;
+
+    template<size_t I>
+    using index_tag_t = symbol_tag_t<index_symbol_t<I>>;
+
+    template<Tag tag>
+    static constexpr size_t tag_index = index_of<tag, X...>::value;
+
+    using tags_info_t = tags_info<symbol_tag_t<X>...>;
+
+    template<class... Tags>
+    using super_meta_clazz_t = meta_clazz<tag_symbol_t<Tags>...>;
+
+    using pod_info_t = bind_to_t<symbols_info, flatten_tuples_t<assign_tuple_t<symbol_tuple_t<X>, X>...>>;
+    static constexpr bool is_pod = (DataSymbol<X> && ...);
+
+    using values_info_t = bind_to_t<symbols_info, flatten_tuples_t<std::conditional_t<Value<X>, std::tuple<X>, std::tuple<>>...>>;
+    static constexpr bool is_values = (Value<X> && ...);
+
+    template<Tag tag>
+    static constexpr bool has_tag = (symbol_info<X>::template has_name<tag> || ...);
+
+    template<Tag tag>
+    static constexpr bool is_clazz_var = Variable<tag_symbol_t<tag>> && Clazz<std::tuple_element_t<0, symbol_tuple_t<tag_symbol_t<tag>>>>;
+};
+
+template<Symbol... X>
+struct meta_clazz : symbols_info<X...> {
     using clazz_t = clazz<X...>;
     using tuple_t = typename clazz_t::tuple_t;
     using meta_clazz_t = meta_clazz;
@@ -1520,15 +1662,6 @@ struct meta_clazz {
 
     template<DataSymbol... Ts>
     using with_data = meta_clazz<X..., Ts...>;
-
-    // TODO, use array instead of tuple, when more std::array operations are constexpr P0202R3
-    static constexpr auto names_array = std::tuple{tag_info<symbol_tag_t<X>>::name...};
-    static constexpr auto names_array_array = std::array{tag_info<symbol_tag_t<X>>::name...};
-
-    using tags_tuple_t = std::tuple<symbol_tag_t<X>...>;
-
-    template<Tag... tags>
-    using super_meta_clazz_t = meta_clazz<tag_symbol_t<tags>...>;
 
     union {
         clazz_t fields;
@@ -1674,6 +1807,11 @@ public:
     template<Tag tag>
     static constexpr size_t tag_index = index_of<tag, X...>::value;
 
+    using tags_info_t = tags_info<symbol_tag_t<X>...>;
+
+    template<class... Tags>
+    using super_meta_clazz_t = meta_clazz<tag_symbol_t<Tags>...>;
+
     using meta_pod_t = bind_to_t<meta_clazz, flatten_tuples_t<assign_tuple_t<symbol_tuple_t<X>, X>...>>;
     static constexpr bool is_pod = (DataSymbol<X> && ...);
 
@@ -1769,10 +1907,10 @@ public:
         }(), ...);
     }
 
-    template<class... tags, class F>
-    requires sizeof...(tags) > 0 && (Variable<tag_symbol_t<tags>> && ...)
+    template<class... Tags, class F>
+    requires sizeof...(Tags) > 0 && (Variable<tag_symbol_t<Tags>> && ...)
     constexpr inline void for_each_as_var(F&& f) {
-        (std::invoke(std::forward<F>(f), union_cast<tag_symbol_t<tags>&>(get<tags>())), ...);
+        (std::invoke(std::forward<F>(f), union_cast<tag_symbol_t<Tags>&>(get<Tags>())), ...);
     }
 
     template<class F>
@@ -1789,10 +1927,10 @@ public:
         }(), ...);
     }
 
-    template<class... tags, class F>
-    requires sizeof...(tags) > 0 && (Value<tag_symbol_t<tags>> && ...)
+    template<class... Tags, class F>
+    requires sizeof...(Tags) > 0 && (Value<tag_symbol_t<Tags>> && ...)
     constexpr inline void for_each(F&& f) {
-        (std::invoke(std::forward<F>(f), get<tags>()), ...);
+        (std::invoke(std::forward<F>(f), get<Tags>()), ...);
     }
 
     template<class... tag>
@@ -1836,66 +1974,65 @@ struct set_difference<W1<Ts...>, W2<Us...>> {
 };
 
 template<class T, class U>
-using set_difference_t = typename set_difference::type;
+using set_difference_t = typename set_difference<T, U>::type;
 
 template<Clazz, Clazz>
 struct shared_vars;
 
-template<Tag... tags>
-requires sizeof...(tags) > 0
+template<Tag... Tags>
 struct clazz_comparator {
+    // Tags in C which are not these Tags
     template<Clazz C>
-    using meta_values_t = typename meta_clazz_t<C>::meta_values_t;
+    using tags_diff = set_difference_t<typename meta_values_t<C>::tags_info_t, tags_info<Tags...>>;
 
     template<Clazz L, Clazz R>
-    requires (meta_values_t<L>::template has_tag<tags> && ...) 
-          && (meta_values_t<R>::template has_tag<tags> && ...)
+    requires (meta_values_t<L>::template has_tag<Tags> && ...) 
+          && (meta_values_t<R>::template has_tag<Tags> && ...)
     static constexpr bool weak_less_than(const L& l, const R& r) {
-        return std::forward_as_tuple(get<tags>(l)..., meta_values_t<L>::size) 
-             < std::forward_as_tuple(get<tags>(r)..., meta_values_t<R>::size);
+        return std::forward_as_tuple(get<Tags>(l)..., meta_values_t<L>::size) 
+             < std::forward_as_tuple(get<Tags>(r)..., meta_values_t<R>::size);
     }
     
     template<Clazz L, Clazz R>
-    requires (meta_values_t<L>::template has_tag<tags> && ...) 
-          && (meta_values_t<R>::template has_tag<tags> && ...)
+    requires (meta_values_t<L>::template has_tag<Tags> && ...) 
+          && (meta_values_t<R>::template has_tag<Tags> && ...)
     static constexpr bool strong_less_than(const L& l, const R& r) {
         if constexpr (meta_values_t<L>::size != meta_values_t<R>::size)
             // When they have a different number of value fields, weak_less_than is enough to disambiguate
-            return weak_less_than(L, R);
+            return weak_less_than(l, r);
         else {
-            // Else, l < r when the fields not included in comparison have a lower lexicographical order
-            using lxtags = set_difference_t<typename meta_values_t<L>::tags_tuple_t, std::tuple<tags...>>;
-            using rxtags = set_difference_t<typename meta_values_t<R>::tags_tuple_t, std::tuple<tags...>>;
-            constexpr auto lxnames = bind_to_t<typename meta_values_t<L>::template super_meta_clazz_t, lxtags>::names_array;
-            constexpr auto rxnames = bind_to_t<typename meta_values_t<R>::template super_meta_clazz_t, rxtags>::names_array;
+            // Disambiguate by the lexicographical order of the missing fields of each clazz
+            constexpr auto ldiffnames = tags_diff<L>::names_array;
+            constexpr auto rdiffnames = tags_diff<R>::names_array;
+            // Equality iff comparing all value fields of both clazzes
+            static_assert(ldiffnames != rdiffnames || tags_diff<L>::empty, 
+                "Unable to determine a strong strict inequality: only a subset of the mutually "
+                "shared fields of two structurally indistinguishable clazzes are being compared.");
             // TODO: sort the names before ascertaining lexicographical order
-            constexpr auto lless = lxnames < rxnames ? 0 : 1;
-            return std::forward_as_tuple(get<tags>(l)..., lless) 
-                 < std::forward_as_tuple(get<tags>(r)..., 1);
+            constexpr auto lless = ldiffnames < rdiffnames ? 0 : 1;
+            return std::forward_as_tuple(get<Tags>(l)..., lless) 
+                 < std::forward_as_tuple(get<Tags>(r)..., 1);
         }
     }
     
     template<Clazz L, Clazz R>
-    requires (meta_values_t<L>::template has_tag<tags> && ...) 
-          && (meta_values_t<R>::template has_tag<tags> && ...)
-    static constexpr bool weak_equals(const L& l, const R& r) {
-        // Can only be equal if L and R have the same number of value fields
+    requires (meta_values_t<L>::template has_tag<Tags> && ...) 
+          && (meta_values_t<R>::template has_tag<Tags> && ...)
+    static constexpr bool weak_eqivalent(const L& l, const R& r) {
+        // Can only be equivalent if L and R have the same number of value fields
         if constexpr (meta_values_t<L>::size == meta_values_t<R>::size)
-            return std::forward_as_tuple(get<tags>(l)...) == std::forward_as_tuple(get<tags>(r)...);
+            return std::forward_as_tuple(get<Tags>(l)...) == std::forward_as_tuple(get<Tags>(r)...);
         else
             return false;
     }
     
     template<Clazz L, Clazz R>
-    requires (meta_values_t<L>::template has_tag<tags> && ...) 
-          && (meta_values_t<R>::template has_tag<tags> && ...)
+    requires (meta_values_t<L>::template has_tag<Tags> && ...) 
+          && (meta_values_t<R>::template has_tag<Tags> && ...)
     static constexpr bool strong_equals(const L& l, const R& r) {
-        using lxtags = set_difference_t<typename meta_values_t<L>::tags_tuple_t, std::tuple<tags...>>;
-        using rxtags = set_difference_t<typename meta_values_t<R>::tags_tuple_t, std::tuple<tags...>>;
-        
-        // Can only be equals if all value fields are included in comparison
-        if constexpr (std::is_same_v<lxtags, std::tuple<>> && std::is_same_v<rxtags, std::tuple<>>)
-            return std::forward_as_tuple(get<tags>(l)...) == std::forward_as_tuple(get<tags>(r)...);
+        // Can only be equal if all value fields are included in comparison (which implies two clazzes share all value fields)
+        if constexpr (tags_diff<L>::empty && tags_diff<R>::empty)
+            return std::forward_as_tuple(get<Tags>(l)...) == std::forward_as_tuple(get<Tags>(r)...);
         else 
             return false;
     }
@@ -1924,9 +2061,9 @@ struct shared_vars<clazz<Ls...>, clazz<Rs...>> {
 
     using l_shared_clazz_t = bind_to_t<clazz, l_shared_symbols_tuple_t>;
     
-    using l_shared_names_array_t = map_tuple_t<l_shared_symbols_tuple_t, symbol_tag_t>;
+    using l_shared_names_tuple_t = map_tuple_t<l_shared_symbols_tuple_t, symbol_tag_t>;
     
-    using l_clazz_comparator_t = bind_to_t<clazz_comparator, l_shared_names_array_t>;
+    using l_clazz_comparator_t = bind_to_t<clazz_comparator, l_shared_names_tuple_t>;
 };
 
 template<Clazz L, Clazz R>
@@ -1960,48 +2097,48 @@ using l_clazz_comparator_t = typename shared_vars<L, R>::l_clazz_comparator_t;
  * Why: LHS and RHS have the same number of value fields (in this case, lhs == rhs)
  */
 template<Clazz L, Clazz R>
-constexpr bool less_than(const L& l, const R& r) {
+constexpr bool strong_less_than(const L& l, const R& r) {
     constexpr auto lsize = meta_clazz_t<L>::meta_values_t::size;
     constexpr auto rsize = meta_clazz_t<L>::meta_values_t::size;
     if constexpr (lsize < rsize)
-        return l_clazz_comparator_t<L, R>::less_than(l, r);
+        return l_clazz_comparator_t<L, R>::strong_less_than(l, r);
     else if constexpr (lsize > rsize)
-        return l_clazz_comparator_t<R, L>::less_than(l, r);
+        return l_clazz_comparator_t<R, L>::strong_less_than(l, r);
     else {
         using lshared = typename shared_vars<L, R>::l_shared_clazz_t;
         using rshared = typename shared_vars<R, L>::l_shared_clazz_t;
-        if constexpr (meta_clazz_t<lshared>::names_array <= meta_clazz_t<rshared>::names_array)
-            return l_clazz_comparator_t<L, R>::less_than(l, r);
+        if constexpr (meta_values_t<lshared>::tags_info_t::names_array <= meta_values_t<rshared>::tags_info_t::names_array)
+            return l_clazz_comparator_t<L, R>::strong_less_than(l, r);
         else
-            return l_clazz_comparator_t<R, L>::less_than(l, r);
+            return l_clazz_comparator_t<R, L>::strong_less_than(l, r);
     }
 }
 
-template<Tag... tags, Clazz L, Clazz R>
-requires sizeof...(tags) > 0
-constexpr bool less_than(const L& l, const R& r) {
-    return clazz_comparator<tags...>::less_than(l, r);
+template<Tag... Tags, Clazz L, Clazz R>
+requires sizeof...(Tags) > 0
+constexpr bool strong_less_than(const L& l, const R& r) {
+    return clazz_comparator<Tags...>::strong_less_than(l, r);
 }
 
 template<MetaClazz M1, MetaClazz M2>
 constexpr bool operator<(const M1& l, const M2& r) {
-    return less_than(l.fields, r.fields);
+    return strong_less_than(l.fields, r.fields);
 }
 
 template<Clazz L, Clazz R>
-constexpr bool equals(const L& l, const R& r) {
-    return l_clazz_comparator_t<L, R>::equals(l, r);
+constexpr bool strong_equals(const L& l, const R& r) {
+    return l_clazz_comparator_t<L, R>::strong_equals(l, r);
 }
 
-template<Tag... tags, Clazz L, Clazz R>
-requires sizeof...(tags) > 0
-constexpr bool equals(const L& l, const R& r) {
-    return clazz_comparator<tags...>::equals(l, r);
+template<Tag... Tags, Clazz L, Clazz R>
+requires sizeof...(Tags) > 0
+constexpr bool strong_equals(const L& l, const R& r) {
+    return clazz_comparator<Tags...>::strong_equals(l, r);
 }
 
 template<MetaClazz M1, MetaClazz M2>
 constexpr bool operator==(const M1& l, const M2& r) {
-    return equals(l.fields, r.fields);
+    return strong_equals(l.fields, r.fields);
 }
 
 template<Tag... Tags, class Struct>
@@ -2031,7 +2168,7 @@ namespace detail {
 // This will be be constexpr when P0202R3 is implemented in GCC
 template<Clazz C>
 auto sorted_values_names_array() {
-    auto fields = meta_values_t<C>::names_array_array;
+    auto fields = meta_values_t<C>::tags_info_t::names_array_array;
     std::sort(begin(fields), end(fields));
     return fields;
 }
@@ -2103,8 +2240,13 @@ struct clazz : struple<clazz<X...>, X...> {
         : clazz(detail::set::placeholder_collection<Ts...>(std::forward<Ts>(in)...)) 
     {
         static_assert((Ts::template shares_name<X...> && ...), 
-            "Setting a field which doesn't exist in clazz");
+            "Initialising a field which doesn't exist in clazz");
     }
+
+    // Construct from tuple with the same number of fields as we have data fields
+    template<Tuple T>
+    requires std::tuple_size<std::decay_t<T>>::value == symbols_info<X...>::pod_info_t::size
+    constexpr clazz(T&& tuple) noexcept : clazz{std::make_from_tuple<clazz>(std::forward<T>(tuple))} {}
 
     constexpr inline auto operator->() {
         if constexpr (meta_clazz_t::template has_co_dec<dec::operator_points_to<void()>>)
@@ -2131,7 +2273,7 @@ struct clazz : struple<clazz<X...>, X...> {
         if constexpr (meta_clazz_t::template has_co_dec<dec::operator_eq<void(const T&)>>)
             return this->operator_eq(r);
         else
-            return equals(*this, r);
+            return strong_equals(*this, r);
     }
 
     template<Clazz T>
@@ -2139,7 +2281,7 @@ struct clazz : struple<clazz<X...>, X...> {
         if constexpr (meta_clazz_t::template has_co_dec<dec::operator_not_eq<void(const T&)>>)
             return this->operator_not_eq(r);
         else
-            return !equals(*this, r);
+            return !strong_equals(*this, r);
     }
 
     template<Clazz T>
@@ -2147,7 +2289,7 @@ struct clazz : struple<clazz<X...>, X...> {
         if constexpr (meta_clazz_t::template has_co_dec<dec::operator_less<void(const T&)>>)
             return this->operator_less(r);
         else
-            return less_than(*this, r);
+            return strong_less_than(*this, r);
     }
 
     template<Clazz T>
@@ -2155,7 +2297,7 @@ struct clazz : struple<clazz<X...>, X...> {
         if constexpr (meta_clazz_t::template has_co_dec<dec::operator_greater_eq<void(const T&)>>)
             return this->operator_greater_eq(r);
         else
-            return !less_than(*this, r);
+            return !strong_less_than(*this, r);
     }
 
     template<Clazz T>
@@ -2163,7 +2305,7 @@ struct clazz : struple<clazz<X...>, X...> {
         if constexpr (meta_clazz_t::template has_co_dec<dec::operator_greater<void(const T&)>>)
             return this->operator_greater(r);
         else
-            return less_than(r, *this);
+            return strong_less_than(r, *this);
     }
 
     template<Clazz T>
@@ -2171,7 +2313,7 @@ struct clazz : struple<clazz<X...>, X...> {
         if constexpr (meta_clazz_t::template has_co_dec<dec::operator_less_eq<void(const T&)>>)
             return this->operator_less_eq(r);
         else
-            return !less_than(r, *this);
+            return !strong_less_than(r, *this);
     }
 
 // Have to use macros instead of template variables unfortunately
@@ -2181,6 +2323,70 @@ struct clazz : struple<clazz<X...>, X...> {
 #undef HAS_CO_DEC
 
 };
+
+template<Clazz C, Tuple T>
+requires std::is_same_v<T, typename meta_clazz_t<C>::tuple_t>
+const C& as_clazz(const T& tuple) {
+    return union_cast<const C&>(tuple);
+}
+
+template<Clazz C, Tuple T>
+requires std::is_same_v<T, typename meta_clazz_t<C>::tuple_t>
+C& as_clazz(T& tuple) {
+    return union_cast<C&>(tuple);
+}
+
+template<NamedTupleWrapper N, Tuple T>
+auto& as_named_tuple(const T& tuple) {
+    using nup_t = bind_to_t<N, T>;
+    return union_cast<const nup_t&>(tuple);
+}
+
+template<NamedTupleWrapper N, Tuple T>
+auto& as_named_tuple(T& tuple) {
+    using nup_t = bind_to_t<N, T>;
+    return union_cast<nup_t&>(tuple);
+}
+
+template<class, bool Const, Tag... Tags>
+struct view;
+
+template<class... X, bool Const, Tag... Tags>
+requires sizeof...(Tags) > 0
+struct view<clazz<X...>, Const, Tags...> 
+     : view<typename meta_clazz<X...>::template super_meta_clazz_t<Tags...>::clazz_t, Const> {};
+
+template<class... X, bool Const>
+struct view<clazz<X...>, Const> {
+    template<class T>
+    using const_t = std::conditional_t<Const, std::add_const_t<T>, T>;
+
+    using type = clazz <
+        std::conditional_t <
+            Variable<X>, 
+            typename tag_info<symbol_tag_t<X>>::template var_t<std::add_lvalue_reference_t<const_t<typename symbol_info<X>::value_t>>>,
+            X
+        >...
+    >;
+};
+
+template<NamedTupleWrapper N, class... X, bool Const, Tag... Tags>
+requires sizeof...(Tags) > 0
+struct view<N<X...>, Const, Tags...> 
+     : view<typename N<X...>::type::template super_meta_clazz_t<Tags...>::clazz_t, Const> {};
+
+template<NamedTupleWrapper N, class... X, bool Const>
+struct view<N<X...>, Const> {
+    template<class T>
+    using const_t = std::conditional_t<Const, std::add_const_t<T>, T>;
+    using type = N<std::add_lvalue_reference_t<const_t<typename symbol_info<X>::value_t>>...>;
+};
+
+template<class T, Tag... Tags>
+using view_t = typename view<T, false, Tags...>::type;
+
+template<class T, Tag... Tags>
+using const_view_t = typename view<T, true, Tags...>::type;
 
 DECLARE_STRUPLE_SYMBOL(variant_index);
 
@@ -2220,9 +2426,10 @@ constexpr decltype(auto) vmax(T0&& val1, T1&& val2, Ts&&... vs) {
 }
 
 template<Trait Trt, ImplementsTrait<Trt>... Variants>
-class varctor {
+class vvector {
     size_t write_head = 0;
     std::vector<char> buffer;
+    std::vector<size_t> positions;
 
 public:
     template<class T>
@@ -2235,27 +2442,80 @@ public:
     void emplace_back(Ts&&... args) {
         using variant_t = variant<T>;
         constexpr size_t value_size = sizeof(variant_t);
-        
+        constexpr size_t index = index_of_type<T, Variants...>::value;
+
+        positions.push_back(write_head);
         buffer.reserve(write_head + value_size);
-        new (&buffer[write_head]) variant_t(index_of_type<T, Variants...>::value, std::forward<Ts>(args)...);
+        new (&buffer[write_head]) variant_t(index, std::forward<Ts>(args)...);
         write_head += value_size;
     }
     
     using value_type = typename Trt::template variant_clazz_t<Variants...>;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+
+    reference at(size_t pos) {
+        return reinterpret_cast<reference>(buffer[positions.at(pos)]);
+    }
+    const_reference at(size_t pos) const {
+        return reinterpret_cast<const_reference>(buffer[positions.at(pos)]);
+    }
+    reference operator[](size_t pos) {
+        return reinterpret_cast<reference>(buffer[positions[pos]]);
+    }
+    const_reference operator[](size_t pos) const {
+        return reinterpret_cast<const_reference>(buffer[positions[pos]]);
+    }
+    reference front() {
+        return reinterpret_cast<reference>(buffer[0]);
+    }
+    const_reference front() const {
+        return reinterpret_cast<const_reference>(buffer[0]);
+    }
+    reference back() {
+        return reinterpret_cast<reference>(buffer[positions.back()]);
+    }
+    const_reference back() const {
+        return reinterpret_cast<const_reference>(buffer[positions.back()]);
+    }
+    size_t size() const noexcept {
+        return positions.size();
+    }
+    size_t data_size() const noexcept {
+        return buffer.size();
+    }
+    bool empty() const noexcept {
+        return positions.empty();
+    }
+    void pop_back() {
+        auto& back = buffer[positions.back()];
+
+        // Destruct back element
+        detail::visit_clazz_variant<void, Variants...>(
+            std::index_sequence_for<Variants...>{},
+            back, &back, []<class T>(T& self) { self.~T(); });
+
+        // Remove position and truncate buffer
+        positions.pop_back();
+        buffer.resize(back);
+    }
 
 private:
     static constexpr size_t var_sizes[] = { sizeof(variant<Variants>)... };
 
     template<bool Const>
     class _iterator {
-        using container_t = std::conditional_t<Const, const varctor, varctor>;
+        using value_type = vvector::value_type;
+        using reference = value_type&;
+        using pointer = value_type*;
+
+        using container_t = std::conditional_t<Const, const vvector, vvector>;
         using value_t = std::conditional_t<Const, const value_type, value_type>;
 
-        size_t pos = 0;
-        container_t& underlying;
-        
         friend container_t;
-        _iterator(size_t p, container_t& u) : pos(p), underlying(u) {}
+
+        size_t pos = 0;
+        container_t& underlying;        
 
     public:                
         auto& operator++() {
@@ -2287,16 +2547,10 @@ public:
     inline iterator begin() {
         return {0, *this};
     }
-    inline const_interator begin() const {
-        return {0, *this};
-    }
     inline const_interator cbegin() const {
         return {0, *this};
     }
     inline iterator end() {
-        return {write_head, *this};
-    }
-    inline const_interator end() const {
         return {write_head, *this};
     }
     inline const_interator cend() const {
@@ -2337,18 +2591,30 @@ private:
     }
 
 public:
-    varctor() {
+    void reserve(size_t elements) {
         constexpr auto max = vmax(0, sizeof(variant<Variants>)...);
-        buffer.reserve(max * 16);
+        buffer.reserve(max * elements);
+        positions.reserve(elements);
     }
 
-    ~varctor() {
-        // Make sure to destruct all variants
+    vvector() {
+        reserve(16);
+    }
+
+    void clear() {
+        // Destruct all variants
         for (auto& i : *this)
             detail::visit_clazz_variant<void, Variants...>(
                 std::index_sequence_for<Variants...>{},
                 i.variant_index, &i,
                 []<class T>(T& self) { self.~T(); });
+
+        buffer.clear();
+        positions.clear();
+    }
+
+    ~vvector() {
+        clear();
     }
 };
 
@@ -2440,11 +2706,9 @@ using type = meta_pod <
 
 static_assert(std::is_same_v<var::_1<int>, meta_clazz_t<type>::tag_symbol_t<tag::_1>>);
 
-#define tpe tpe::
-
 using type2 = clazz <
     var :: _1 <int>,
-    tpe _2 <double>
+    tpe :: _2 <double>
 >;
 
 static_assert(std::is_same_v<double, typename type2::_2>);
@@ -2590,6 +2854,14 @@ using var3 = clazz <
     }>
 >;
 
+DECLARE_STRUPLE_SYMBOL(print);
+DECLARE_STRUPLE_SYMBOL(x);
+DECLARE_STRUPLE_SYMBOL(y);
+DECLARE_STRUPLE_SYMBOL(z);
+DECLARE_STRUPLE_SYMBOL(name);
+DECLARE_STRUPLE_SYMBOL(age);
+
+
 using n_trait = trait<dec::_10<int()>>;
 
 int main(int argc, char** argv) {
@@ -2600,12 +2872,21 @@ int main(int argc, char** argv) {
 
     // return hash(clazz{set::_1 = 1});
 
+    auto tup = std::tuple{1, 2};
+    auto nup = nuple(std::tuple{1,2});
+    using nupc_t = clazz<var::_2<int>, var::_3<int>>;
+    auto nupc = nupc_t(tup);
+    view_t<nupc_t> nupcv = nupc;
+    return nupcv._2 + nupcv._3;
+    auto& nupc2 = as_named_tuple<nuple>(tup);
+    return nupc2._1 + nupc2._2;
+
     auto c = clazz<var::_1<int, 1>, val::_2<int, 20>, val::_3<int, 300>>{};
     auto t = tie<tag::_1, tag::_2>(c);
     auto& [first, second] = t;
     return first + second;
     
-    // auto pv = varctor<n_trait
+    // auto pv = vvector<n_trait
     // , var1
     // , var2
     // >();
