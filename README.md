@@ -186,7 +186,7 @@ assert(vvec.data_size() == 2 * sizeof(position) + sizeof(person) + 3);
 // Uses 67 bytes instead of 123, which would have been the case with a plain vector of variants
 
 for (const auto& element : vvec)
-    element.print(); // Call print() directly on element, which is declared in the printable trait
+    element.print(); // Call print(), which is declared in the printable trait, directly on element without ugly visitor syntax
 
 // Prints:
 // (0,0,0)
