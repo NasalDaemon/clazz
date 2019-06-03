@@ -3,7 +3,7 @@ First clazz structural typing in C++.
 
 C++ is a continually evolving language, but one thing hasn't changed: the type system is nominal. Nominal typing is a subset of structural typing, where the structure of two objects is assumed to be identical only if they share the same type name. That's just the compiler being lazy! However, with structural typing, structures are compared irrespective of the name you give to a type. You can get the compiler to do your work, so there's more time for coffee breaks.
 
-There are some features in C++ which are the building blocks of structural programming: tuples, structured bindings, template and concepts. This library has the aim of exploiting these as much as possible to allow you to express yourself in a structural manner without getting bogged down with pesky names. I can recognise that famous actor's facial structure any day, but ask me what his name is and I'll have to ask my wife.
+There are some features in C++ which are the building blocks of structural programming: tuples, structured bindings, templates and concepts. This library has the aim of exploiting these as much as possible to allow you to express yourself in a structural manner without getting bogged down with pesky names. I can recognise that famous actor's facial structure any day, but ask me what his name is and I'll have to ask my wife.
 
 > In vanilla C++, even before a class has a body defined, it is assigned a unique name. Relationships between similar classes can only be expressed nominally via explicit inheritance or composition. Does your class draw? You better make sure you inherit from IDrawable, and don't forget IDrawToo, IDrawableReally, and IDrawableReallyIMeanIt! If it doesn't then it doesn't draw. Not even stick-men.
 >
@@ -113,18 +113,20 @@ assert(amountHHH != ammountYYY);
 ### 4. <a name="greatest-hits-nuple"></a>Named tuples (aka indexed clazzes), interop with existing std::tuple, structured bindings
 ```c++
 // Fields are named _i where i is 1, ..., 22
-auto n1 = nuple{2, 5, 8}; // nuple<int, int> {_1: 2, _2: 5, _3: 8}
+auto n1 = nuple{2, 5, 8}; // nuple<int, int, int> {_1: 2, _2: 5, _3: 8}
 
 // Conversions from tuple available:
-auto t = std::tuple{1, 2, 3}; // tuple<int, int> 
+auto t = std::tuple{1, 2, 3}; // tuple<int, int, int> 
 auto n2 = nuple(t); // nuple<int, int> {_1: 1, _2: 2, _3: 3}
-auto& n3 = as_named_tuple<nuple>(tuple); // nuple<int, int>& via reinterpret_cast {_1: 1, _2: 2, _3: 3}
-view_t<decltype(n2)> n4 = t // nuple<int&, int&> {_1: &1, _2: &2, _3: &3}
+auto& n3 = as_named_tuple<nuple>(tuple); // nuple<int, int, int>& via reinterpret_cast {_1: 1, _2: 2, _3: 3}
+auto& n4 = as_nuple(t); // nuple<int, int, int>& via reinterpret_cast {_1: 1, _2: 2, _3: 3}
+view_t<decltype(n2)> n5 = t // nuple<int&, int&, int&> {_1: &1, _2: &2, _3: &3}
 
-assert(n1 == n2 && n1 == n2 && n1 == n3 && n1 == n4); // All structurally equal
+assert(n1 == n2 && n1 == n2 && n1 == n3 && n1 == n4 && n1 == n5); // All structurally equal
 
 // All named tuples can be viewed as anonymous tuples with nuple->tuple
-assert(t == n1->tuple && t == n2->tuple && t == n3->tuple); // All nuple-tuples equal to the original tuple, t
+assert(t == n1->tuple && t == n2->tuple && t == n3->tuple 
+    && t == n4->tuple && t == n5->tuple); // All nuple-tuples equal to the original tuple, t
 
 // Structured bindings via proxy tuple
 auto [a1, b1, c1] = n1->tuple; // aka: auto [a1, b1, c1] = union_cast<std::tuple<int, int, int>&>(n1);
@@ -220,7 +222,8 @@ people.reserve(20);
 // Sort algorithm is cache optimised for SoA by first finding a sorting order
 // before moving elements into their final position in memory, field by field.
 // In this particular case, the age column is only accessed when ages for
-// the respective elements are moved into their final position.
+// the respective elements are moved into their final position, since the
+// sorting order is found without ever needing to query the age column.
 people.sort();
 
 for (auto& person : people) {
@@ -233,11 +236,14 @@ for (auto& person : people) {
 // John Smith is 21 years old
 
 // Sort in ascending order of age
+// In this particular case, the name column is only accessed when names for
+// the respective elements are moved into their final position, since the
+// sorting order is found without ever needing to query the name column.
 people.sort([](const auto& left, const auto& right) {
   return left.age < right.age;
 });
 
-for (auto& person: people) {
+for (auto& person : people) {
   std::cout << person.name << " is " << person.age << " years old\n";
 }
 
