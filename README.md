@@ -202,14 +202,15 @@ using persons = soa <       // Similar memory structure to: clazz <
 
 auto people = persons(); // Default reserved memory is for 12 elements
 
-// Creates one block of memory in one memory allocation for use by all fields,
-// with elements to be arranged in column-wise order in the memory block.
-people.reserve(20); 
-
 // Add some elements to the SoA
 people.push_back("John Smith", 21); // Construct and move in place
 people.emplace_back("John Doe", 22); // Construct in place
 people.emplace_back(set age = 23, set name = "Joe Moe"); // Construct with designated initialiser in place
+
+// Creates one block of memory in one memory allocation for use by all fields,
+// with elements to be arranged in column-wise order in the memory block.
+// Moves existing elements into the newly allocated memory column-wise and frees the old.
+people.reserve(20); 
 
 // Sort in ascending order of name then age.
 // Sort algorithm is cache optimised for SoA by first finding a sorting order
