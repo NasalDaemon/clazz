@@ -1,9 +1,14 @@
+// GPLv3 @ github.com/MarkMitch/clazz
+
 #include <algorithm>
 #include <tuple>
 #include <type_traits>
 #include <functional>
 #include <variant>
 #include <string>
+#include <iostream>
+#include <memory>
+#include <numeric>
 
 #ifdef _MSC_VER
 #define EBO_MSVC __declspec(empty_bases)
@@ -11,6 +16,9 @@
 #define EBO_MSVC
 #endif
 
+#define CLAZZ_NS clz
+
+namespace CLAZZ_NS {
 template<class = void>
 constexpr bool false_v = false;
 
@@ -23,26 +31,30 @@ constexpr To union_cast(From&& in) noexcept {
 // https://stackoverflow.com/questions/35941045/can-i-obtain-c-type-names-in-a-constexpr-way/35943472#35943472
 template<class T>
 constexpr auto type_name() {
+    if (!std::is_constant_evaluated())
+        throw "Must be called in constexpr context";
+
     char const* p = __PRETTY_FUNCTION__;
     while (*p++ != '=');
     for (; *p == ' '; ++p);
     char const* p2 = p;
     int count = 1;
-    for (;;++p2)
-    {
-        switch (*p2)
-        {
+    for (;;++p2) {
+        switch (*p2) {
         case '[':
             ++count;
             break;
         case ']':
             --count;
             if (!count)
-                return std::string_view{p, std::size_t(p2 - p)};
+                return std::string_view{p, size_t(p2 - p)};
         }
     }
-    return std::string_view{};
+    throw "Failed";
 }
+
+template<class T>
+static constexpr std::string_view type_name_v = type_name<T>();
 
 enum class symbol_type {
     invalid,
@@ -150,6 +162,9 @@ struct tag_info {
     static constexpr bool is_tag = false;
 };
 
+template<Symbol S>
+using symbol_tag_info = tag_info<symbol_tag_t<S>>;
+
 template<class T>
 concept bool Tag = tag_info<T>::is_tag;
 
@@ -165,6 +180,12 @@ struct tags_info {
 
 template<class S, class N>
 concept bool SymbolNamed = Symbol<S> && Tag<N> && symbol_info<S>::template has_name<N>;
+
+template<class M, class N>
+concept bool DefinitionNamed = Definition<M> && SymbolNamed<M, N>;
+
+template<class M, class N>
+concept bool FunctionNamed = Function<M> && SymbolNamed<M, N>;
 
 template<class M, class N>
 concept bool MethodNamed = Method<M> && SymbolNamed<M, N>;
@@ -205,6 +226,9 @@ struct is_clazz<clazz<Ts...>> : std::true_type {};
 template<class T>
 concept bool Clazz = is_clazz<std::decay_t<T>>::value;
 
+template<Clazz C>
+struct clazz_info : clazz_info<std::decay_t<C>> {};
+
 template<class>
 struct is_tuple : std::false_type {};
 
@@ -233,7 +257,7 @@ template<Clazz T>
 using meta_values_t = typename meta_clazz_t<T>::meta_values_t;
 
 template<class T>
-concept bool Pod = Clazz<T> && meta_clazz_t<T>::is_pod;
+concept bool Pod = Clazz<T> && clazz_info<std::decay_t<T>>::is_pod;
 
 template<class T>
 struct is_meta_clazz : std::false_type{};
@@ -251,10 +275,10 @@ template<Clazz, Symbol...>
 struct struple;
 
 template<class T, class... Decs>
-concept bool Implements = Clazz<T> && meta_clazz_t<T>::template implements<Decs...>;
+concept bool Implements = Clazz<T> && clazz_info<T>::template implements<Decs...>;
 
 template<class T, class... Decs>
-concept bool CoImplements = Clazz<T> && meta_clazz_t<T>::template co_implements<Decs...>;
+concept bool CoImplements = Clazz<T> && clazz_info<T>::template co_implements<Decs...>;
 
 template<Declaration... Ds>
 struct trait;
@@ -276,7 +300,7 @@ struct clazz_is_subclazz_of : std::false_type {};
 
 template<Clazz SubClazz, Symbol... Sups>
 struct clazz_is_subclazz_of<SubClazz, clazz<Sups...>> {
-    static constexpr bool value = meta_clazz_t<SubClazz>::template implements_of<Sups...>;
+    static constexpr bool value = clazz_info<SubClazz>::template implements_of<Sups...>;
 };
 
 template<class SubClazz, class SuperClazz>
@@ -302,7 +326,7 @@ struct clazz_is_co_subclazz_of : std::false_type {};
 
 template<Clazz SubClazz, Symbol... Sups>
 struct clazz_is_co_subclazz_of<SubClazz, clazz<Sups...>> {
-    static constexpr bool value = meta_clazz_t<SubClazz>::template co_implements_of<Sups...>;
+    static constexpr bool value = clazz_info<SubClazz>::template co_implements_of<Sups...>;
 };
 
 template<class SubClazz, class SuperClazz>
@@ -328,7 +352,7 @@ struct clazz_is_contra_subclazz_of : std::false_type {};
 
 template<Clazz SubClazz, Symbol... Sups>
 struct clazz_is_contra_subclazz_of<SubClazz, clazz<Sups...>> {
-    static constexpr bool value = meta_clazz_t<SubClazz>::template contra_implements_of<Sups...>;
+    static constexpr bool value = clazz_info<SubClazz>::template contra_implements_of<Sups...>;
 };
 
 template<class SubClazz, class SuperClazz>
@@ -353,6 +377,12 @@ template<class T>
 struct call_signature {
     using return_t = T;
     static constexpr bool is_call = false;
+    static constexpr bool is_const = std::is_const_v<T>;
+    using as_const = std::add_const_t<T>;
+    template<class F, class... Ts>
+    static constexpr bool is_partial_application_of = false;
+    template<class F, class... Ts>
+    static constexpr bool is_exact_partial_application_of = false;
 };
 
 template<class R, class... Args>
@@ -414,14 +444,14 @@ concept bool Struple = is_struple<std::decay_t<T>>::value;
 template<class, class>
 struct assign_tuple;
 
-template<class C>
-struct assign_tuple<std::tuple<>, C> {
-    using type = std::tuple<>;
+template<template<class...> class Tup, class C>
+struct assign_tuple<Tup<>, C> {
+    using type = Tup<>;
 };
 
-template<class T, class C>
-struct assign_tuple<std::tuple<T>, C> {
-    using type = std::tuple<C>;
+template<template<class...> class Tup, class T, class C>
+struct assign_tuple<Tup<T>, C> {
+    using type = Tup<C>;
 };
 
 template<class T, class C>
@@ -430,13 +460,24 @@ using assign_tuple_t = typename assign_tuple<T, C>::type;
 template<class, template<class> class>
 struct map_tuple;
 
-template<class... Ts, template<class> class W>
-struct map_tuple<std::tuple<Ts...>, W> {
-    using type = std::tuple<W<Ts>...>;
+template<class... Ts, template<class...> class Tup, template<class> class W>
+struct map_tuple<Tup<Ts...>, W> {
+    using type = Tup<W<Ts>...>;
 };
 
 template<class T, template<class> class W>
 using map_tuple_t = typename map_tuple<T, W>::type;
+
+template<class, template<class...> class>
+struct apply_tuple;
+
+template<class... Ts, template<class...> class Tup, template<class...> class W>
+struct apply_tuple<Tup<Ts...>, W> {
+    using type = W<Ts...>;
+};
+
+template<class T, template<class...> class W>
+using apply_tuple_t = typename apply_tuple<T, W>::type;
 
 template<class...>
 struct flatten_tuples;
@@ -551,17 +592,32 @@ namespace detail::set {
         }
     };
 
+    template<class>
+    struct is_undetermined : std::false_type {};
+
+    template<template<bool> class Assertion>
+    struct is_undetermined<undetermined<Assertion>> : std::true_type, Assertion<false> {};
+
     template<Tag Name, class Target, class Tuple>
     // void Target means Target is yet to be determined by the clazz to be constructed
     // When void, Target cannot be used for template argument deduction of clazz
     struct placeholder : Tuple {
         using tuple_t = Tuple;
         using tuple_t::tuple;
-                    
+
         template<class VarT>
-        constexpr inline decltype(auto) make() noexcept {
-            return std::make_from_tuple<VarT>(static_cast<tuple_t&>(*this));
+        constexpr inline decltype(auto) make() && noexcept {
+            return std::make_from_tuple<VarT>(static_cast<tuple_t&&>(*this));
         }
+
+        constexpr inline tuple_t&& as_tuple() && noexcept {
+            return static_cast<tuple_t&&>(*this);
+        }
+
+        static constexpr bool is_undetermined = is_undetermined<Target>::value;
+
+        template<Tag T>
+        static constexpr bool has_tag = std::is_same_v<T, Name>;
 
         template<Symbol S>
         static constexpr bool has_name = symbol_info<S>::template has_name<Name>;
@@ -589,12 +645,22 @@ namespace detail::set {
 
         template<Symbol S>
         static constexpr bool has_name_of = (Ps::template has_name<S> || ...);
+        
+        template<Tag T>
+        static constexpr bool has_tag = (Ps::template has_tag<T> || ...);
 
         template<DataSymbol S>
         requires has_name_of<S>
-        constexpr inline S make_symbol() {
+        constexpr inline S make_symbol() && {
             constexpr size_t idx = find_ph_for_symbol<0, S>();
-            return std::get<idx>(*this).template make<S>();
+            return std::get<idx>(std::move(*this)).template make<S>();
+        }
+
+        template<Tag T>
+        requires has_tag<T>
+        constexpr inline decltype(auto) get_tuple() && {
+            constexpr size_t idx = find_ph_for_tag<0, T>();
+            return std::get<idx>(std::move(*this)).as_tuple();
         }
 
     private:
@@ -607,7 +673,20 @@ namespace detail::set {
                 return find_ph_for_symbol<I+1, S>();
             }
         }
+
+        template<size_t I, Tag T>
+        static constexpr inline size_t find_ph_for_tag() {
+            using placeholder_t = std::decay_t<std::tuple_element_t<I, tuple_t>>;
+            if constexpr(placeholder_t::template has_tag<T>) {
+                return I;
+            } else {
+                return find_ph_for_tag<I+1, T>();
+            }
+        }
     };
+
+    template<SetPlaceholder... Ps>
+    placeholder_collection(Ps&&...) -> placeholder_collection<Ps...>;
 }
 
 template<class P>
@@ -690,22 +769,31 @@ struct index_of<T, P, Ps...> {
 
 template<Clazz Top>
 struct EBO_MSVC struple<Top> {
-    template<class... Names>
-    constexpr struple(Names&&...) noexcept {}
+    template<class... Ts>
+    constexpr struple(Ts&&...) noexcept {}
+};
+
+template<Clazz Top, class... Xs>
+struct struple<Top, void, Xs...> : struple<Top, Xs...> {
+protected:
+    // Skip void elements
+    template<class... Ts>
+    constexpr struple(Ts&&... ins) noexcept 
+        : struple<Top, Xs...>{std::forward<Ts>(ins)...} 
+    {
+    }
 };
 
 template<Clazz Top, class X, class... Xs>
-struct struple<Top, X, Xs...> : struple<Top, Xs...>, symbol_element_t<Top, X>
-{
+struct struple<Top, X, Xs...> : struple<Top, Xs...>, symbol_element_t<Top, X> {
+protected:
     using this_t = struple<Top, X, Xs...>;
     using base_t = struple<Top, Xs...>;
     using element_t = symbol_element_t<Top, X>;
     using tag_t = symbol_tag_t<X>;
     static_assert(sizeof(base_t) == sizeof(flatten_tuples_t<symbol_tuple_t<Xs>...>));
 
-protected:
-    constexpr struple() noexcept
-        :base_t(), element_t{} {}
+    constexpr struple() noexcept : base_t{}, element_t{} {}
 
     template<class... Ts>
     requires EmptySymbol<X>
@@ -727,7 +815,7 @@ protected:
     requires DataSymbol<X> && T::template has_name_of<X>
     constexpr struple(T&& setter_collection) noexcept
         : base_t{std::move(setter_collection)}
-        , element_t{setter_collection.template make_symbol<X>()}
+        , element_t{std::move(setter_collection).template make_symbol<X>()}
     {
     }
 
@@ -741,8 +829,8 @@ protected:
 
     template<Clazz Clz>
     requires DataSymbol<X> 
-          && meta_clazz_t<Clz>::template has_tag<tag_t> 
-          && Value<typename meta_clazz_t<Clz>::template tag_symbol_t<tag_t>>
+          && clazz_info<Clz>::template has_tag<tag_t> 
+          && Value<typename clazz_info<Clz>::template tag_symbol_t<tag_t>>
     constexpr struple(Clz&& clz) noexcept
         : base_t{std::forward<Clz>(clz)}
         , element_t{get<tag_t>(std::forward<Clz>(clz))}
@@ -751,7 +839,7 @@ protected:
 
     template<Clazz Clz>
     requires DataSymbol<X> 
-          && !meta_clazz_t<Clz>::template has_tag<tag_t> 
+          && !clazz_info<Clz>::template has_tag<tag_t> 
           && symbol_info<X>::has_default_ctor
     constexpr struple(Clz&& clz) noexcept
         : base_t{std::forward<Clz>(clz)}
@@ -761,6 +849,7 @@ protected:
 };
 
 template<class... Names, class... Targets, class... Ts>
+requires (!detail::set::placeholder<Names, Targets, Ts>::is_undetermined && ...)
 clazz(detail::set::placeholder<Names, Targets, Ts>&&...) -> pod<typename tag_info<Names>::template var_t<Targets>...>;
 
 template<class... Names, class... Targets, class... Ts>
@@ -836,43 +925,47 @@ using make_meta_clazz_t = typename detail::make_meta_clazz_t<name_wrapper, std::
 
 template<template<size_t, class> class name_wrapper, class... X>
 using make_clazz_t = typename make_meta_clazz_t<name_wrapper, X...>::clazz_t;
+}
 
 #define DECLARE_NAMED_TUPLE_VAR_WRAPPER(struple_symbol) \
-    namespace struple_symbols { template<size_t I, class T> struct struple_symbol { using type = void; }; }
+    namespace CLAZZ_NS::struple_symbols { template<size_t I, class T> struct struple_symbol { using type = void; }; }
 
 #define DECLARE_NAMED_TUPLE_OR_META_CLAZZ(tuple_name, clazz_or_meta_clazz) \
     DECLARE_NAMED_TUPLE_VAR_WRAPPER(tuple_name);\
-    /* Unfortunately, both an alias and concrete type are needed for deduction guides */\
-    template<class... X>\
-    using tuple_name ## _t = make_ ## clazz_or_meta_clazz ## _t<struple_symbols::tuple_name, X...>;\
-    template<class... X>\
-    struct tuple_name : tuple_name ## _t<X...> {\
-        using type = tuple_name ## _t <X...>;\
-        static_assert(sizeof(type) == sizeof(std::tuple<X...>));\
+    namespace CLAZZ_NS {\
+        /* Unfortunately, both an alias and concrete type are needed for deduction guides */\
+        template<class... X>\
+        using tuple_name ## _t = make_ ## clazz_or_meta_clazz ## _t<struple_symbols::tuple_name, X...>;\
+        template<class... X>\
+        struct tuple_name : tuple_name ## _t<X...> {\
+            using type = tuple_name ## _t <X...>;\
+            static_assert(sizeof(type) == sizeof(std::tuple<X...>));\
+            template<class... Ts>\
+            constexpr tuple_name(Ts&&... in) noexcept : type(std::forward<Ts>(in)...) {}\
+        };\
+        template<class... X>\
+        struct is_named_tuple<tuple_name<X...>> : std::true_type {};\
+        template<>\
+        struct is_named_tuple_wrapper<tuple_name> : std::true_type {};\
+        /* Deduction guides only possible on concrete classes, and not on aliases */\
         template<class... Ts>\
-        constexpr tuple_name(Ts&&... in) noexcept : type(std::forward<Ts>(in)...) {}\
-    };\
-    template<class... X>\
-    struct is_named_tuple<tuple_name<X...>> : std::true_type {};\
-    template<>\
-    struct is_named_tuple_wrapper<tuple_name> : std::true_type {};\
-    /* Deduction guides only possible on concrete classes, and not on aliases */\
-    template<class... Ts>\
-    tuple_name(Ts...) -> tuple_name<Ts...>;\
-    template<class... Ts>\
-    tuple_name(std::tuple<Ts...>) -> tuple_name<Ts...>;
+        tuple_name(Ts...) -> tuple_name<Ts...>;\
+        template<class... Ts>\
+        tuple_name(std::tuple<Ts...>) -> tuple_name<Ts...>;\
+    }
     
 #define DECLARE_NAMED_META_CLAZZ(tuple_name) DECLARE_NAMED_TUPLE_OR_META_CLAZZ(tuple_name, meta_clazz)
 #define DECLARE_NAMED_TUPLE(tuple_name) DECLARE_NAMED_TUPLE_OR_META_CLAZZ(tuple_name, clazz)
 
 #define DECLARE_NAMED_TUPLE_VAR(tuple_name, index, struple_tag_name) \
-    namespace struple_symbols {\
+    namespace CLAZZ_NS::struple_symbols {\
         template<class T>\
-        struct tuple_name<index, T> { using type = ::var::struple_tag_name<T>; };\
+        struct tuple_name<index, T> { using type = ::CLAZZ_NS::var::struple_tag_name<T>; };\
         static_assert(Symbol<typename tuple_name<std::max(0, index-1), int>::type>,\
                       "Previous index of "#tuple_name" is not valid");\
     }
 
+namespace CLAZZ_NS {
 template<template<class> class DecWrapper, class DecType, Tag TagName>
 struct dec_info_impl {
     template<Declaration To>
@@ -882,6 +975,8 @@ struct dec_info_impl {
     static constexpr bool is_callable = CallSignature<DecType>;
     static constexpr bool is_const_callable = CallSignatureConst<DecType>;
     static constexpr bool is_mutable_callable = is_callable && !CallSignatureConst<DecType>;
+    template<Tag Name>\
+    static constexpr bool has_tag = std::is_same_v<Name, TagName>;\
     template<Tag Name, class Top, class F>
     static constexpr bool is_applicable_for_def = std::is_same_v<Name, TagName> &&
             ((is_mutable_callable && call_signature<DecType>::template is_partial_application_of<F, Top&>)
@@ -902,69 +997,76 @@ namespace detail {
     template<class R, class... Variants, class T, class F, class... Ts>
     inline constexpr R visit_clazz_variant(std::index_sequence<>, unsigned char, T*, F&&, Ts&&...) noexcept;
 }
+}
+
+#define FWD_DECLARE_STRUPLE_DEC(tag_name) \
+    namespace CLAZZ_NS::dec {\
+        template<class DecType>\
+        struct tag_name;\
+    }
 
 #define DECLARE_STRUPLE_DEC(tag_name) \
-    FWD_DECLARE_STRUPLE_VAR(tag_name)\
-    FWD_DECLARE_STRUPLE_DEF(tag_name)\
-    namespace dec {\
+    namespace CLAZZ_NS {\
         template<class DecType>\
-        struct tag_name {};\
-    }\
-    template<class DecType>\
-    struct dec_info<dec::tag_name<DecType>> : dec_info_impl<dec::tag_name, DecType, ::tag::tag_name> {\
-        using return_t = typename call_signature<DecType>::return_t;\
-        static constexpr bool is_dec = true;\
-        template<class... Variants>\
-        struct variant_def {\
-            using type = detail::def::tag_name ## _impl_<int, DecType, decltype([]<class... Os>(auto& self, Os&&... args) {\
-                return detail::visit_clazz_variant<return_t, Variants...>(\
-                    std::index_sequence_for<Variants...>{},\
-                    self.variant_index, &self,\
-                    []<class C, class... Ts>(C&& c, Ts&&... ins) {\
-                        return std::forward<C>(c).tag_name(std::forward<Ts>(ins)...);\
-                    },\
-                    std::forward<Os>(args)...);\
-            })>;\
+        struct dec_info<dec::tag_name<DecType>> : dec_info_impl<dec::tag_name, DecType, ::CLAZZ_NS::tag::tag_name> {\
+            using return_t = typename call_signature<DecType>::return_t;\
+            static constexpr bool is_dec = true;\
+            template<class... Variants>\
+            struct variant_def {\
+                using type = detail::def::tag_name ## _impl_<int, DecType, decltype([]<class... Os>(auto& self, Os&&... args) {\
+                    return detail::visit_clazz_variant<return_t, Variants...>(\
+                        std::index_sequence_for<Variants...>{},\
+                        self._.index, &self,\
+                        []<class C, class... Ts>(C&& c, Ts&&... ins) -> decltype(auto) {\
+                            return std::forward<C>(c).tag_name(std::forward<Ts>(ins)...);\
+                        },\
+                        std::forward<Os>(args)...);\
+                })>;\
+            };\
+            template<class... Variants>\
+            using variant_def_t = typename variant_def<Variants...>::type;\
         };\
-        template<class... Variants>\
-        using variant_def_t = typename variant_def<Variants...>::type;\
     }
 
 #define FWD_DECLARE_STRUPLE_TAG(tag_name) \
-    namespace tag {\
+    namespace CLAZZ_NS::tag {\
         struct tag_name;\
     }
 
 #define DECLARE_STRUPLE_TAG(tag_name) \
-    FWD_DECLARE_STRUPLE_VAR(tag_name)\
-    FWD_DECLARE_STRUPLE_VAL(tag_name)\
-    namespace tag {\
-        struct tag_name {};\
-        namespace tag_name ## _concepts_impl_ {\
+    namespace CLAZZ_NS {\
+        namespace tag {\
+            struct tag_name {};\
+        }\
+        namespace detail::tag::concepts::tag_name {\
             template<class Struct>\
             concept bool HasMemVar = requires (Struct s) { {s.tag_name}; };\
         }\
-    }\
-    template<>\
-    struct tag_info<tag::tag_name> {\
-        static constexpr bool is_tag = true;\
-        template<class T>\
-        using var_t = detail::var::tag_name ## _impl_<T>;\
-        template<class T, auto Value>\
-        using val_t = detail::val::tag_name ## _impl_<T, decltype([]{ return Value; })>;\
-        static constexpr auto& set_placeholder = set::tag_name;\
-        static constexpr auto name = std::string_view(#tag_name);\
-        template<Symbol S>\
-        struct assert_unique_name {\
-            static constexpr bool value = !symbol_info<S>::template has_name<tag::tag_name>;\
-            static_assert(value, "Field "#tag_name" is not unique.");\
+        template<>\
+        struct tag_info<tag::tag_name> {\
+            static constexpr bool is_tag = true;\
+            STRUPLE_ALIAS_VAR(var_t, tag_name);\
+            STRUPLE_ALIAS_VAL(val_t, tag_name);\
+            STRUPLE_ALIAS_TPE(tpe_t, tag_name);\
+            STRUPLE_ALIAS_DEF(def_t, tag_name);\
+            STRUPLE_ALIAS_FUN(fun_t, tag_name);\
+            STRUPLE_ALIAS_OVL(ovl_t, tag_name);\
+            static constexpr auto& set = set::tag_name;\
+            static constexpr auto name = std::string_view(#tag_name);\
+            template<Symbol S>\
+            struct assert_unique_name {\
+                static constexpr bool value = !symbol_info<S>::template has_name<tag::tag_name>;\
+                static_assert(value, "Field "#tag_name" is not unique.\n"\
+                                     "If defining multiple overloads of def::"#tag_name", use ovl::"#tag_name);\
+            };\
+            template<class Struct>\
+            static constexpr bool has_mem_var = detail::tag::concepts::tag_name::HasMemVar<Struct>;\
+            template<class Struct>\
+            using mem_var_t = var_t<typename class_data_member_pointer_info<decltype(&Struct::tag_name)>::member_t>;\
         };\
-        template<class Struct>\
-        static constexpr bool has_mem_var = tag::tag_name ## _concepts_impl_::HasMemVar<Struct>;\
-        template<class Struct>\
-        using mem_var_t = var_t<typename class_data_member_pointer_info<decltype(&Struct::tag_name)>::member_t>;\
     }
 
+namespace CLAZZ_NS {
 template<class>
 struct class_data_member_pointer_info;
 
@@ -974,36 +1076,50 @@ struct class_data_member_pointer_info<Member Outer::*> {
     using member_t = Member;
 };
 
-#define DECLARE_STRUPLE_SET(tag_name) \
-    FWD_DECLARE_STRUPLE_TAG(tag_name)\
-    namespace set {\
-        constexpr struct {\
-            template<bool E>\
-            struct assert_targeted {\
-                static_assert("clazz<...> template deduction failure" && false_v<>,\
-                  "set::"#tag_name"(args...):\nCannot deduce template arguments for clazz<...> with set::"#tag_name"(args...), "\
-                  "use set::"#tag_name".as<TargetType>(args...) to set a type for deduction when "\
-                  "calling a constructor of a clazz member with multiple parameters.");\
-            };\
-            template<class T>\
-            constexpr auto operator=(T&& in) const {\
-                return detail::set::placeholder<tag::tag_name, std::decay_t<T>, std::tuple<T&&>>{std::forward<T>(in)};\
-            }\
-            template<class T>\
-            constexpr auto operator()(T&& in) const {\
-                return detail::set::placeholder<tag::tag_name, std::decay_t<T>, std::tuple<T&&>>{std::forward<T>(in)};\
-            }\
-            template<class... Ts>\
-            constexpr auto operator()(Ts&&... ins) const {\
-                return detail::set::placeholder<tag::tag_name, detail::set::undetermined<assert_targeted>, std::tuple<Ts&&...>>{std::forward<Ts>(ins)...};\
-            }\
-            template<class Target, class... Ts>\
-            constexpr auto as(Ts&&... ins) const {\
-                return detail::set::placeholder<tag::tag_name, Target, std::tuple<Ts&&...>>{std::forward<Ts>(ins)...};\
-            }\
-        } tag_name;\
-    }\
+namespace detail::set {
+    template<class Tg, template<bool> class Assert>
+    struct setter {
+        template<class T>
+        constexpr auto operator=(T&& in) const {
+            return detail::set::placeholder<Tg, std::decay_t<T>, std::tuple<T&&>>{std::forward<T>(in)};
+        }
+        template<class T>
+        constexpr auto operator()(T&& in) const {
+            return detail::set::placeholder<Tg, std::decay_t<T>, std::tuple<T&&>>{std::forward<T>(in)};
+        }
+        template<class... Ts>
+        constexpr auto operator()(Ts&&... ins) const {
+            return detail::set::placeholder<Tg, detail::set::undetermined<Assert>, std::tuple<Ts&&...>>{std::forward<Ts>(ins)...};
+        }
+        template<class Target, class... Ts>
+        constexpr auto as(Ts&&... ins) const {
+            return detail::set::placeholder<Tg, Target, std::tuple<Ts&&...>>{std::forward<Ts>(ins)...};
+        }
+        template<class T>
+        constexpr auto fwd(T&& in) const {
+            return detail::set::placeholder<Tg, T&&, std::tuple<T&&>>{std::forward<T>(in)};
+        }
+    };
+}
+}
 
+#define DECLARE_STRUPLE_SET(tag_name) \
+    namespace CLAZZ_NS {\
+        namespace detail::set::assert_targeted {\
+            template<bool E>\
+            struct tag_name {\
+                static_assert("clazz<...> template deduction failure" && false_v<>,\
+                    "set::"#tag_name"(args...):\nCannot deduce template arguments for clazz<...> with set::"#tag_name"(args...), "\
+                    "use set::"#tag_name".as<TargetType>(args...) to set a type for deduction when "\
+                    "calling a constructor of a clazz member with multiple parameters.");\
+            };\
+        }\
+        namespace set {\
+            constexpr detail::set::setter<tag::tag_name, detail::set::assert_targeted::tag_name> tag_name;\
+        }\
+    }
+
+namespace CLAZZ_NS {
 template<Tag TagName>
 struct tag_queries {
     using tag_t = TagName;
@@ -1035,13 +1151,15 @@ template<class Sym, Tag TagName, class Top, class F>
 struct tmpl_dec_queries {
     // See if call sig on dec is invocable with this function template
     template<Declaration Dec>
-    static constexpr bool has_dec = dec_info<Dec>::template is_match_for_def<TagName, Top, F>;
+    static constexpr bool has_dec = //dec_info<Dec>::template has_tag<TagName>;
+        dec_info<Dec>::template is_match_for_def<TagName, Top, F>;
     template<Symbol S>
     static constexpr bool shares_dec = tag_queries<TagName>::template shares_name<S> && 
         ((!DefinitionTemplate<S> && symbol_info<S>::template shares_dec<Sym>)
        || (DefinitionTemplate<S> && std::is_same_v<Sym, S>));
     template<Declaration Dec>
-    static constexpr bool has_wider_dec = dec_info<Dec>::template is_applicable_for_def<TagName, Top, F>;
+    static constexpr bool has_wider_dec = //dec_info<Dec>::template has_tag<TagName>; 
+        dec_info<Dec>::template is_applicable_for_def<TagName, Top, F>;
     template<Declaration D>
     static constexpr bool has_narrower_dec = false; // TODO
     template<Symbol S>
@@ -1054,316 +1172,397 @@ struct tmpl_dec_queries {
 
 template<Tag TagName, Declaration Dec>
 struct symbol_queries : tag_queries<TagName>, dec_queries<Dec> {};
+}
 
 #define FWD_DECLARE_STRUPLE_VAR(tag_name) \
-    namespace detail::var {\
+    namespace CLAZZ_NS::detail::var {\
         template<class T, class... DefaultValue>\
         requires sizeof...(DefaultValue) <= 1 && (std::is_invocable_r_v<T, DefaultValue> && ...)\
         struct tag_name ## _impl_;\
     }
 
+#define STRUPLE_ALIAS_VAR(alias_name, tag_name) \
+    template<class T, auto... DefaultValue>\
+    using alias_name = detail::var::tag_name ## _impl_<T, std::conditional_t<std::is_invocable_v<decltype(DefaultValue)>,\
+                                                                                decltype(DefaultValue),\
+                                                                                decltype([]{ return DefaultValue; })>...>
+
 #define DECLARE_STRUPLE_VAR(tag_name) \
-    FWD_DECLARE_STRUPLE_VAR(tag_name)\
-    namespace detail::var {\
-        template<class T>\
-        struct tag_name ## _impl_<T> {\
-            T tag_name;\
-            template<class... Ts>\
-            constexpr tag_name ## _impl_(Ts&&... ins) noexcept : tag_name(std::forward<Ts>(ins)...) {}\
-        };\
-        template<class T, class DefaultValue>\
-        struct tag_name ## _impl_<T, DefaultValue> {\
-            T tag_name;\
-            template<class... Ts>\
-            constexpr tag_name ## _impl_(Ts&&... ins) noexcept : tag_name(std::forward<Ts>(ins)...) {}\
-            constexpr tag_name ## _impl_() noexcept : tag_name(DefaultValue{}()) {}\
-        };\
-    }\
-    namespace var {\
-        template<class T, auto... DefaultValue>\
-        using tag_name = detail::var::tag_name ## _impl_<T, std::conditional_t<std::is_invocable_v<decltype(DefaultValue)>,\
-                                                                          decltype(DefaultValue),\
-                                                                          decltype([]{ return DefaultValue; })>...>;\
-    }\
-    template<class T, class... DefaultValue>\
-    struct symbol_info<detail::var::tag_name ## _impl_<T, DefaultValue...>> : symbol_queries<tag::tag_name, dec::tag_name<T>> {\
-        using value_t = T;\
-        using symbol_t = detail::var::tag_name ## _impl_<T, DefaultValue...>;\
-        static constexpr symbol_type type = symbol_type::var;\
-        using tuple_t = std::tuple<T>;\
-        template<class>\
-        using struple_element_t = symbol_t;\
-        static constexpr bool has_default_ctor = sizeof...(DefaultValue) == 1;\
-        template<Clazz C>\
-        requires meta_clazz_t<C>::template has_symbol<detail::var::tag_name ## _impl_<T, DefaultValue...>>\
-        static constexpr decltype(auto) invoke(C&& c) {\
-            if constexpr (std::is_lvalue_reference_v<C>) return (c.tag_name);\
-            else return std::move(c.tag_name);\
+    namespace CLAZZ_NS {\
+        namespace detail::var {\
+            template<class T>\
+            struct tag_name ## _impl_<T> {\
+                T tag_name;\
+                template<class... Ts>\
+                constexpr tag_name ## _impl_(Ts&&... ins) noexcept : tag_name(std::forward<Ts>(ins)...) {}\
+            };\
+            template<class T, class DefaultValue>\
+            struct tag_name ## _impl_<T, DefaultValue> {\
+                T tag_name;\
+                template<class... Ts>\
+                constexpr tag_name ## _impl_(Ts&&... ins) noexcept : tag_name(std::forward<Ts>(ins)...) {}\
+                constexpr tag_name ## _impl_() noexcept : tag_name(DefaultValue{}()) {}\
+            };\
         }\
-        template<class Test>\
-        static constexpr bool has_compatible_field = requires(Test test) { {test.tag_name} -> T };\
-        template<class Struct>\
-        requires has_compatible_field<std::decay_t<Struct>>\
-        static constexpr decltype(auto) extract_compatible_value(Struct&& s) {\
-            if constexpr(requires(Struct s) { {s.tag_name} -> T}) {\
-                if constexpr (std::is_lvalue_reference_v<Struct>) return (s.tag_name);\
-                else return std::move(s.tag_name);\
+        namespace var {\
+            STRUPLE_ALIAS_VAR(tag_name, tag_name);\
+        }\
+        template<class T, class... DefaultValue>\
+        struct symbol_info<detail::var::tag_name ## _impl_<T, DefaultValue...>> : symbol_queries<tag::tag_name, dec::tag_name<T>> {\
+            using value_t = T;\
+            using symbol_t = detail::var::tag_name ## _impl_<T, DefaultValue...>;\
+            static constexpr symbol_type type = symbol_type::var;\
+            using tuple_t = std::tuple<T>;\
+            template<class>\
+            using struple_element_t = symbol_t;\
+            static constexpr bool has_default_ctor = sizeof...(DefaultValue) == 1;\
+            static constexpr decltype(auto) default_value() requires has_default_ctor { return (DefaultValue{}(), ...); }\
+            template<Clazz C>\
+            requires clazz_info<C>::template has_symbol<detail::var::tag_name ## _impl_<T, DefaultValue...>>\
+            static constexpr decltype(auto) invoke(C&& c) {\
+                if constexpr(std::is_rvalue_reference_v<C&&>) return static_cast<T&&>(c.tag_name);\
+                else return (c.tag_name);\
             }\
-            else return s.tag_name();\
-        }\
-    };
+            template<class Test>\
+            static constexpr bool has_compatible_field = requires(Test test) { {test.tag_name} -> T };\
+            template<class Struct>\
+            requires has_compatible_field<std::decay_t<Struct>>\
+            static constexpr decltype(auto) extract_compatible_value(Struct&& s) {\
+                if constexpr(requires(Struct s) { {s.tag_name} -> T}) {\
+                    if constexpr (std::is_lvalue_reference_v<Struct>) return (s.tag_name);\
+                    else return std::move(s.tag_name);\
+                }\
+                else return s.tag_name();\
+            }\
+        };\
+    }
     
 #define FWD_DECLARE_STRUPLE_VAL(tag_name) \
-    namespace detail::val {\
+    namespace CLAZZ_NS::detail::val {\
         template<class T, class Value>\
         requires std::is_invocable_r_v<T, Value>\
         struct tag_name ## _impl_;\
     }
 
+#define STRUPLE_ALIAS_VAL(alias_name, tag_name) \
+    template<class T, auto Value>\
+    using alias_name = detail::val::tag_name ## _impl_<T, std::conditional_t<std::is_invocable_v<decltype(Value)>,\
+                                                                             decltype(Value),\
+                                                                             decltype([]{ return Value; })>>
+
 #define DECLARE_STRUPLE_VAL(tag_name) \
-    FWD_DECLARE_STRUPLE_VAL(tag_name)\
-    namespace detail::val {\
-        template<class T, class Value>\
-        requires std::is_invocable_r_v<T, Value>\
-        struct tag_name ## _impl_ {\
-            static constexpr T tag_name = Value{}();\
-        };\
-    }\
-    namespace val {\
-        template<class T, auto Value>\
-        using tag_name = detail::val::tag_name ## _impl_<T, std::conditional_t<std::is_invocable_v<decltype(Value)>,\
-                                                                               decltype(Value),\
-                                                                               decltype([]{ return Value; })>>;\
-    }\
-    template<class T, class Value>\
-    struct symbol_info<detail::val::tag_name ## _impl_<T, Value>> : symbol_queries<tag::tag_name, dec::tag_name<T>> {\
-        using value_t = T;\
-        using symbol_t = detail::val::tag_name ## _impl_<T, Value>;\
-        static constexpr symbol_type type = symbol_type::val;\
-        using tuple_t = std::tuple<>;\
-        template<class>\
-        using struple_element_t = symbol_t;\
-        static constexpr bool has_default_ctor = true;\
-        static constexpr T invoke() { return Value{}(); }\
-        template<class Test>\
-        static constexpr bool has_compatible_field = requires { {Test::tag_name} -> T };\
-        template<class Struct>\
-        requires has_compatible_field<std::decay_t<Struct>>\
-        static constexpr decltype(auto) extract_compatible_value(Struct&& s) {\
-            if constexpr(requires { {Struct::tag_name} -> T}) return (s.tag_name);\
-            else return s.tag_name();\
+    namespace CLAZZ_NS {\
+        namespace detail::val {\
+            template<class T, class Value>\
+            requires std::is_invocable_r_v<T, Value>\
+            struct tag_name ## _impl_ {\
+                static constexpr T tag_name = Value{}();\
+            };\
         }\
-    };
+        namespace val {\
+            STRUPLE_ALIAS_VAL(tag_name, tag_name);\
+        }\
+        template<class T, class Value>\
+        struct symbol_info<detail::val::tag_name ## _impl_<T, Value>> : symbol_queries<tag::tag_name, dec::tag_name<T>> {\
+            using value_t = T;\
+            using symbol_t = detail::val::tag_name ## _impl_<T, Value>;\
+            static constexpr symbol_type type = symbol_type::val;\
+            using tuple_t = std::tuple<>;\
+            template<class>\
+            using struple_element_t = symbol_t;\
+            static constexpr bool has_default_ctor = true;\
+            static constexpr T invoke() { return Value{}(); }\
+            template<class Test>\
+            static constexpr bool has_compatible_field = requires { {Test::tag_name} -> T };\
+            template<class Struct>\
+            requires has_compatible_field<std::decay_t<Struct>>\
+            static constexpr decltype(auto) extract_compatible_value(Struct&& s) {\
+                if constexpr(requires { {Struct::tag_name} -> T}) return (s.tag_name);\
+                else return s.tag_name();\
+            }\
+        };\
+    }
+
+#define STRUPLE_ALIAS_TPE(alias_name, tag_name) \
+    template<class T>\
+    using alias_name = detail::tpe::tag_name ## _impl_<T>
+
+#define FWD_DECLARE_STRUPLE_TPE(tag_name) \
+    namespace CLAZZ_NS::detail::tpe {\
+        template<class T>\
+        struct tag_name ## _impl_;\
+    }
 
 #define DECLARE_STRUPLE_TPE(tag_name) \
-    namespace detail::tpe {\
+    namespace CLAZZ_NS {\
+        namespace detail::tpe {\
+            template<class T>\
+            struct tag_name ## _impl_ {\
+                using tag_name = T;\
+            };\
+        }\
+        namespace tpe {\
+            STRUPLE_ALIAS_TPE(tag_name, tag_name);\
+        }\
         template<class T>\
-        struct tag_name ## _impl_ {\
-            using tag_name = T;\
+        struct symbol_info<tpe::tag_name<T>> : symbol_queries<tag::tag_name, dec::tag_name<T>> {\
+            using symbol_t = tpe::tag_name<T>;\
+            using value_t = void;\
+            static constexpr symbol_type type = symbol_type::val;\
+            using tuple_t = std::tuple<>;\
+            template<class>\
+            using struple_element_t = symbol_t;\
+            static constexpr bool has_default_ctor = true;\
+            template<class Test>\
+            static constexpr bool has_compatible_field = false;\
         };\
-    }\
-    namespace tpe {\
-        template<class T>\
-        using tag_name = detail::tpe::tag_name ## _impl_<T>;\
-    }\
-    template<class T>\
-    struct symbol_info<tpe::tag_name<T>> : symbol_queries<tag::tag_name, dec::tag_name<T>> {\
-        using symbol_t = tpe::tag_name<T>;\
-        using value_t = void;\
-        static constexpr symbol_type type = symbol_type::val;\
-        using tuple_t = std::tuple<>;\
-        template<class>\
-        using struple_element_t = symbol_t;\
-        static constexpr bool has_default_ctor = true;\
-        template<class Test>\
-        static constexpr bool has_compatible_field = false;\
-    };
+    }
 
 #define FWD_DECLARE_STRUPLE_DEF(tag_name) \
-    namespace detail::def {\
+    namespace CLAZZ_NS::detail::def {\
         template<class Top, class Sig, class... F>\
         struct tag_name ## _impl_;\
     }
 
+#define STRUPLE_ALIAS_DEF(alias_name, tag_name) \
+    template<class Sig, auto... F>\
+    requires (CallSignature<Sig> && sizeof...(F) > 0)\
+            || (std::is_same_v<const Sig, const void> && sizeof...(F) == 1)\
+    using alias_name = detail::def::tag_name ## _impl_<int, Sig, decltype(F)...>
+
 #define DECLARE_STRUPLE_DEF(tag_name) \
-    FWD_DECLARE_STRUPLE_DEF(tag_name)\
-    namespace detail::def {\
-        template<class Top, class R, class... Args, class... F>\
-        struct tag_name ## _impl_<Top, R(Args...) const, F...> : private F... {\
-            constexpr tag_name ## _impl_() {\
-                static_assert((std::is_invocable_r_v<R, F, const Top&, Args...> || ...),\
-                              "No implementations of def::"#tag_name" are reachable given the call signature.");\
-            }\
-            template<class... Ts>\
-            requires std::is_invocable_v<R(Args...), Ts&&...> && (std::is_invocable_r_v<R, F, const Top&, Ts&&...> || ...)\
-            inline constexpr R tag_name(Ts&&... in) const {\
-                return (*this)(static_cast<const Top&>(*this), std::forward<Ts>(in)...);\
-            }\
-            private:\
+    namespace CLAZZ_NS {\
+        namespace detail::def {\
+            template<class Top, class R, class... Args, class... F>\
+            struct tag_name ## _impl_<Top, R(Args...) const, F...> : protected F... {\
+                constexpr tag_name ## _impl_() {\
+                    static_assert((std::is_invocable_r_v<R, F, const Top&, Args...> || ...),\
+                                  "No implementations of def::"#tag_name" are reachable given the call signature.");\
+                }\
+                template<class... Ts>\
+                requires std::is_invocable_v<R(Args...), Ts&&...> && (std::is_invocable_r_v<R, F, const Top&, Ts&&...> || ...)\
+                inline constexpr R tag_name(Ts&&... in) const {\
+                    return (*this)(static_cast<const Top&>(*this), std::forward<Ts>(in)...);\
+                }\
+            protected:\
                 using F::operator()...;\
-        };\
-        template<class Top, class R, class... Args, class... F>\
-        struct tag_name ## _impl_<Top, R(Args...), F...> : private F... {\
-            constexpr tag_name ## _impl_() {\
-                static_assert((std::is_invocable_r_v<R, F, Top&, Args...> || ...),\
-                              "No implementations of def::"#tag_name" are reachable given the call signature.");\
-            }\
-            template<class... Ts>\
-            requires std::is_invocable_v<R(Args...), Ts&&...> && (std::is_invocable_r_v<R, F, Top&, Ts&&...> || ...)\
-            inline constexpr R tag_name(Ts&&... in) {\
-                return (*this)(static_cast<Top&>(*this), std::forward<Ts>(in)...);\
-            }\
-            private:\
+                using top_t = Top;\
+            };\
+            template<class Top, class R, class... Args, class... F>\
+            struct tag_name ## _impl_<Top, R(Args...), F...> : protected F... {\
+                constexpr tag_name ## _impl_() {\
+                    static_assert((std::is_invocable_r_v<R, F, Top&, Args...> || ...),\
+                                  "No implementations of def::"#tag_name" are reachable given the call signature.");\
+                }\
+                template<class... Ts>\
+                requires std::is_invocable_v<R(Args...), Ts&&...> && (std::is_invocable_r_v<R, F, Top&, Ts&&...> || ...)\
+                inline constexpr R tag_name(Ts&&... in) {\
+                    return (*this)(static_cast<Top&>(*this), std::forward<Ts>(in)...);\
+                }\
+            protected:\
                 using F::operator()...;\
-        };\
-        template<class Top, class F>\
-        struct tag_name ## _impl_<Top, void, F> : private F {\
-            template<class... Ts>\
-            inline constexpr decltype(auto) tag_name(Ts&&... in) {\
-                return (*this)(static_cast<Top&>(*this), std::forward<Ts>(in)...);\
-            }\
-            private:\
+                using top_t = Top;\
+            };\
+            template<class Top, class F>\
+            struct tag_name ## _impl_<Top, void, F> : protected F {\
+                template<class... Ts>\
+                requires std::is_invocable_v<F, Top&, Ts&&...>\
+                inline constexpr decltype(auto) tag_name(Ts&&... in) {\
+                    return (*this)(static_cast<Top&>(*this), std::forward<Ts>(in)...);\
+                }\
+            protected:\
                 using F::operator();\
-        };\
-        template<class Top, class F>\
-        struct tag_name ## _impl_<Top, const void, F> : private F {\
-            template<class... Ts>\
-            inline constexpr decltype(auto) tag_name(Ts&&... in) const {\
-                return (*this)(static_cast<const Top&>(*this), std::forward<Ts>(in)...);\
-            }\
-            private:\
+                using top_t = Top;\
+            };\
+            template<class Top, class F>\
+            struct tag_name ## _impl_<Top, const void, F> : protected F {\
+                template<class... Ts>\
+                requires std::is_invocable_v<F, const Top&, Ts&&...>\
+                inline constexpr decltype(auto) tag_name(Ts&&... in) const {\
+                    return (*this)(static_cast<const Top&>(*this), std::forward<Ts>(in)...);\
+                }\
+            protected:\
                 using F::operator();\
+                using top_t = Top;\
+            };\
+        }\
+        namespace def {\
+            STRUPLE_ALIAS_DEF(tag_name, tag_name);\
+        }\
+        template<class Top, class Void, class F>\
+        requires !CallSignature<Void> && std::is_same_v<const Void, const void>\
+        struct symbol_info<detail::def::tag_name ## _impl_<Top, Void, F>> \
+            : tag_queries<tag::tag_name>\
+            , tmpl_dec_queries<detail::def::tag_name ## _impl_<Top, Void, F>, tag::tag_name, Top, F> {\
+            using value_t = void;\
+            using symbol_t = detail::def::tag_name ## _impl_<Top, Void, F>;\
+            static constexpr symbol_type type = symbol_type::def;\
+            static constexpr bool is_tmpl_def = true;\
+            using tuple_t = std::tuple<>;\
+            template<Clazz TTop>\
+            using struple_element_t = detail::def::tag_name ## _impl_<TTop, Void, F>;\
+            static constexpr bool has_default_ctor = true;\
+            template<class Test>\
+            static constexpr bool has_compatible_field = false;\
+            template<Clazz C, class... Ts>\
+            requires clazz_info<C>::template has_symbol<symbol_t>\
+            static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
+                return c.tag_name(std::forward<Ts...>(ins)...);\
+            }\
         };\
-    }\
-    namespace def {\
-        template<class Sig, auto... F>\
-        requires (CallSignature<Sig> && sizeof...(F) > 0)\
-              || (std::is_same_v<const Sig, const void> && sizeof...(F) == 1)\
-        using tag_name = detail::def::tag_name ## _impl_<int, Sig, decltype(F)...>;\
-    }\
-    template<class Top, class Void, class F>\
-    requires !CallSignature<Void> && std::is_same_v<const Void, const void>\
-    struct symbol_info<detail::def::tag_name ## _impl_<Top, Void, F>> \
-        : tag_queries<tag::tag_name>\
-        , tmpl_dec_queries<detail::def::tag_name ## _impl_<Top, Void, F>, tag::tag_name, Top, F> {\
-        using value_t = void;\
-        using symbol_t = detail::def::tag_name ## _impl_<Top, Void, F>;\
-        static constexpr symbol_type type = symbol_type::def;\
-        static constexpr bool is_tmpl_def = true;\
-        using tuple_t = std::tuple<>;\
-        template<Clazz TTop>\
-        using struple_element_t = detail::def::tag_name ## _impl_<TTop, Void, F>;\
-        static constexpr bool has_default_ctor = true;\
-        template<class Test>\
-        static constexpr bool has_compatible_field = false;\
-        template<Clazz C, class... Ts>\
-        requires meta_clazz_t<C>::template has_symbol<symbol_t>\
-        static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
-            return c.tag_name(std::forward<Ts...>(ins)...);\
-        }\
-    };\
-    template<class Top, CallSignature Sig, class... F>\
-    struct symbol_info<detail::def::tag_name ## _impl_<Top, Sig, F...>> : symbol_queries<tag::tag_name, dec::tag_name<Sig>> {\
-        using value_t = void;\
-        using symbol_t = detail::def::tag_name ## _impl_<Top, Sig, F...>;\
-        static constexpr symbol_type type = symbol_type::def;\
-        using tuple_t = std::tuple<>;\
-        template<Clazz TTop>\
-        using struple_element_t = detail::def::tag_name ## _impl_<TTop, Sig, F...>;\
-        static constexpr bool has_default_ctor = true;\
-        template<class Test>\
-        static constexpr bool has_compatible_field = false;\
-        template<Clazz C, class... Ts>\
-        requires meta_clazz_t<C>::template has_symbol<symbol_t>\
-        static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
-            return c.tag_name(std::forward<Ts...>(ins)...);\
-        }\
+        template<class Top, CallSignature Sig, class... F>\
+        struct symbol_info<detail::def::tag_name ## _impl_<Top, Sig, F...>> : symbol_queries<tag::tag_name, dec::tag_name<Sig>> {\
+            using value_t = void;\
+            using symbol_t = detail::def::tag_name ## _impl_<Top, Sig, F...>;\
+            static constexpr symbol_type type = symbol_type::def;\
+            using tuple_t = std::tuple<>;\
+            template<Clazz TTop>\
+            using struple_element_t = detail::def::tag_name ## _impl_<TTop, Sig, F...>;\
+            static constexpr bool has_default_ctor = true;\
+            template<class Test>\
+            static constexpr bool has_compatible_field = false;\
+            template<Clazz C, class... Ts>\
+            requires clazz_info<C>::template has_symbol<symbol_t>\
+            static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
+                return c.tag_name(std::forward<Ts...>(ins)...);\
+            }\
+        };\
     }
 
-#define DECLARE_STRUPLE_FUN(tag_name) \
-    namespace detail::fun {\
+#define FWD_DECLARE_STRUPLE_FUN(tag_name) \
+    namespace CLAZZ_NS::detail::fun {\
         template<CallSignatureConst Sig, class... F>\
         struct tag_name ## _impl_;\
-        template<class R, class... Args, class... F>\
-        struct tag_name ## _impl_<R(Args...) const, F...> {\
-            constexpr tag_name ## _impl_() {\
-                static_assert((std::is_invocable_r_v<R, F, Args...> || ...),\
-                              "No implementations of fun::"#tag_name" are reachable given the call signature.");\
-            }\
+    }
+
+#define STRUPLE_ALIAS_FUN(alias_name, tag_name) \
+    template<CallSignature Sig, auto... F>\
+    using alias_name = detail::fun::tag_name ## _impl_<typename call_signature<Sig>::as_const, decltype(F)...>
+
+#define DECLARE_STRUPLE_FUN(tag_name) \
+    namespace CLAZZ_NS {\
+        namespace detail::fun {\
+            template<class R, class... Args, class... F>\
+            struct tag_name ## _impl_<R(Args...) const, F...> {\
+                constexpr tag_name ## _impl_() {\
+                    static_assert((std::is_invocable_r_v<R, F, Args...> || ...),\
+                                  "No implementations of fun::"#tag_name" are reachable given the call signature.");\
+                }\
+                template<class... Ts>\
+                requires std::is_invocable_v<R(Args...), Ts&&...> && (std::is_invocable_r_v<R, F, Ts&&...> || ...)\
+                inline static constexpr R tag_name(Ts&&... in) {\
+                    static_assert((std::is_convertible_v<Ts&&, Args> && ...),\
+                                  "Cannot call fun::"#tag_name" with these arguments.");\
+                    return std::invoke(overload{F{}...}, std::forward<Ts>(in)...);\
+                }\
+            };\
+        }\
+        namespace fun {\
+            STRUPLE_ALIAS_FUN(tag_name, tag_name);\
+        }\
+        template<CallSignatureConst Sig, class... F>\
+        struct symbol_info<detail::fun::tag_name ## _impl_<Sig, F...>> : symbol_queries<tag::tag_name, dec::tag_name<Sig>> {\
+            using value_t = void;\
+            using symbol_t = detail::fun::tag_name ## _impl_<Sig, F...>;\
+            static constexpr symbol_type type = symbol_type::fun;\
+            using tuple_t = std::tuple<>;\
+            template<class>\
+            using struple_element_t = symbol_t;\
+            static constexpr bool has_default_ctor = true;\
+            template<class Test>\
+            static constexpr bool has_compatible_field = false;\
             template<class... Ts>\
-            requires std::is_invocable_v<R(Args...), Ts&&...> && (std::is_invocable_r_v<R, F, Ts&&...> || ...)\
-            inline static constexpr R tag_name(Ts&&... in) {\
-                static_assert((std::is_convertible_v<Ts&&, Args> && ...),\
-                              "Cannot call fun::"#tag_name" with these arguments.");\
-                return std::invoke(overload{F{}...}, std::forward<Ts>(in)...);\
+            static constexpr decltype(auto) invoke(Ts&&... ins) {\
+                return symbol_t::tag_name(std::forward<Ts...>(ins)...);\
             }\
         };\
-    }\
-    namespace fun {\
-        template<CallSignature Sig, auto... F>\
-        using tag_name = detail::fun::tag_name ## _impl_<typename call_signature<Sig>::as_const, decltype(F)...>;\
-    }\
-    template<CallSignatureConst Sig, class... F>\
-    struct symbol_info<detail::fun::tag_name ## _impl_<Sig, F...>> : symbol_queries<tag::tag_name, dec::tag_name<Sig>> {\
-        using value_t = void;\
-        using symbol_t = detail::fun::tag_name ## _impl_<Sig, F...>;\
-        static constexpr symbol_type type = symbol_type::fun;\
-        using tuple_t = std::tuple<>;\
-        template<class>\
-        using struple_element_t = symbol_t;\
-        static constexpr bool has_default_ctor = true;\
-        template<class Test>\
-        static constexpr bool has_compatible_field = false;\
-        template<class... Ts>\
-        static constexpr decltype(auto) invoke(Ts&&... ins) {\
-            return symbol_t::tag_name(std::forward<Ts...>(ins)...);\
-        }\
-    };
+    }
+
+#define STRUPLE_ALIAS_OVL(alias_name, tag_name) \
+    template<MethodNamed<tag::tag_name>... methods>\
+    using alias_name = detail::ovl::tag_name ## _impl_<methods...>
+
+#define FWD_DECLARE_STRUPLE_OVL(tag_name) \
+    namespace CLAZZ_NS::detail::ovl {\
+        template<MethodNamed<::CLAZZ_NS::tag::tag_name>... F>\
+        struct tag_name ## _impl_;\
+    }
 
 #define DECLARE_STRUPLE_OVL(tag_name) \
-    namespace detail::ovl {\
-        template<MethodNamed<tag::tag_name>... F>\
-        struct tag_name ## _impl_ : F... {\
-            using F::tag_name...;\
-        };\
-    }\
-    namespace ovl {\
-        template<MethodNamed<tag::tag_name>... methods>\
-        using tag_name = detail::ovl::tag_name ## _impl_<methods...>;\
-    }\
-    template<MethodNamed<tag::tag_name>... F>\
-    struct symbol_info<detail::ovl::tag_name ## _impl_<F...>> : tag_queries<tag::tag_name> {\
-        using value_t = void;\
-        using symbol_t = detail::ovl::tag_name ## _impl_<F...>;\
-        static constexpr symbol_type type = symbol_type::ovl;\
-        using tuple_t = std::tuple<>;\
-        template<class Top>\
-        using struple_element_t = detail::ovl::tag_name ## _impl_<symbol_element_t<Top, F>...>;\
-        static constexpr bool has_default_ctor = true;\
-        template<Declaration D>\
-        static constexpr bool has_dec = (symbol_info<F>::template has_dec<D> || ...);\
-        template<Symbol S>\
-        static constexpr bool shares_dec = (symbol_info<F>::template shares_dec<S> || ...);\
-        template<Declaration D>\
-        static constexpr bool has_wider_dec = (symbol_info<F>::template has_wider_dec<D> || ...);\
-        template<Declaration D>\
-        static constexpr bool has_narrower_dec = (symbol_info<F>::template has_narrower_dec<D> || ...);\
-        template<Symbol S>\
-        static constexpr bool shares_wider_dec = (symbol_info<F>::template shares_wider_dec<S> || ...);\
-        template<Symbol S>\
-        static constexpr bool shares_narrower_dec = (symbol_info<F>::template shares_narrower_dec<S> || ...);\
-        static constexpr bool is_all_defs = (Definition<F> && ...);\
-        static constexpr bool is_all_funs = (Function<F> && ...);\
-        template<class Test>\
-        static constexpr bool has_compatible_field = false;\
-        template<Clazz C, class... Ts>\
-        requires meta_clazz_t<C>::template has_symbol<symbol_t>\
-        static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
-            return c.tag_name(std::forward<Ts...>(ins)...);\
+    namespace CLAZZ_NS {\
+        namespace detail::ovl {\
+            template<MethodNamed<::CLAZZ_NS::tag::tag_name>... F>\
+            struct tag_name ## _impl_ : F... {\
+                using F::tag_name...;\
+            };\
+            template<DefinitionNamed<::CLAZZ_NS::tag::tag_name>... Defs>\
+            struct tag_name ## _impl_<Defs...> : protected Defs...{\
+            protected:\
+                using top_t = typename std::tuple_element_t<0, std::tuple<Defs...>>::top_t;\
+                using Defs::operator()...;\
+            public:\
+                template<class... Ts>\
+                requires (std::is_invocable_v<Defs, top_t&, Ts&&...> || ...)\
+                inline constexpr decltype(auto) tag_name(Ts&&... in) {\
+                    static_assert((std::is_same_v<top_t, typename Defs::top_t> && ...));\
+                    return (*this)(static_cast<top_t&>(*this), std::forward<Ts>(in)...);\
+                }\
+                template<class... Ts>\
+                requires (std::is_invocable_v<Defs, const top_t&, Ts&&...> || ...)\
+                inline constexpr decltype(auto) tag_name(Ts&&... in) const {\
+                    static_assert((std::is_same_v<top_t, typename Defs::top_t> && ...));\
+                    return (*this)(static_cast<const top_t&>(*this), std::forward<Ts>(in)...);\
+                }\
+            };\
         }\
-    };
+        namespace ovl {\
+            STRUPLE_ALIAS_OVL(tag_name, tag_name);\
+        }\
+        template<MethodNamed<tag::tag_name>... F>\
+        struct symbol_info<detail::ovl::tag_name ## _impl_<F...>> : tag_queries<tag::tag_name> {\
+            using value_t = void;\
+            using symbol_t = detail::ovl::tag_name ## _impl_<F...>;\
+            static constexpr symbol_type type = symbol_type::ovl;\
+            using tuple_t = std::tuple<>;\
+            template<class Top>\
+            using struple_element_t = detail::ovl::tag_name ## _impl_<symbol_element_t<Top, F>...>;\
+            static constexpr bool has_default_ctor = true;\
+            template<Declaration D>\
+            static constexpr bool has_dec = (symbol_info<F>::template has_dec<D> || ...);\
+            template<Symbol S>\
+            static constexpr bool shares_dec = (symbol_info<F>::template shares_dec<S> || ...);\
+            template<Declaration D>\
+            static constexpr bool has_wider_dec = (symbol_info<F>::template has_wider_dec<D> || ...);\
+            template<Declaration D>\
+            static constexpr bool has_narrower_dec = (symbol_info<F>::template has_narrower_dec<D> || ...);\
+            template<Symbol S>\
+            static constexpr bool shares_wider_dec = (symbol_info<F>::template shares_wider_dec<S> || ...);\
+            template<Symbol S>\
+            static constexpr bool shares_narrower_dec = (symbol_info<F>::template shares_narrower_dec<S> || ...);\
+            static constexpr bool is_all_defs = (Definition<F> && ...);\
+            static constexpr bool is_all_funs = (Function<F> && ...);\
+            template<class Test>\
+            static constexpr bool has_compatible_field = false;\
+            template<Clazz C, class... Ts>\
+            requires clazz_info<C>::template has_symbol<symbol_t>\
+            static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
+                return c.tag_name(std::forward<Ts...>(ins)...);\
+            }\
+        };\
+    }
+
+#define FWD_DECLARE_STRUPLE_SYMBOL(tag_name) \
+    FWD_DECLARE_STRUPLE_TAG(tag_name);\
+    FWD_DECLARE_STRUPLE_DEC(tag_name);\
+    FWD_DECLARE_STRUPLE_VAR(tag_name);\
+    FWD_DECLARE_STRUPLE_VAL(tag_name);\
+    FWD_DECLARE_STRUPLE_TPE(tag_name);\
+    FWD_DECLARE_STRUPLE_DEF(tag_name);\
+    FWD_DECLARE_STRUPLE_FUN(tag_name);\
+    FWD_DECLARE_STRUPLE_OVL(tag_name);
 
 #define DECLARE_STRUPLE_SYMBOL(tag_name) \
+    FWD_DECLARE_STRUPLE_SYMBOL(tag_name);\
     DECLARE_STRUPLE_SET(tag_name);\
     DECLARE_STRUPLE_TAG(tag_name);\
     DECLARE_STRUPLE_DEC(tag_name);\
@@ -1426,10 +1625,10 @@ DECLARE_STRUPLE_SYMBOL(operator_increment); // ++a, a++
 DECLARE_STRUPLE_SYMBOL(operator_decrement); // --a, a--
 
 // Member access
-DECLARE_STRUPLE_SYMBOL(operator_points_to); // a->b
+DECLARE_STRUPLE_SYMBOL(operator_pointer); // a->b
 DECLARE_STRUPLE_SYMBOL(operator_deref); // *a
 DECLARE_STRUPLE_SYMBOL(operator_address_of); // &a
-DECLARE_STRUPLE_SYMBOL(operator_square_brackets); // a[b]
+DECLARE_STRUPLE_SYMBOL(operator_subscript); // a[b]
 
 // Arithemtic
 DECLARE_STRUPLE_SYMBOL(operator_plus); // a + b
@@ -1437,10 +1636,10 @@ DECLARE_STRUPLE_SYMBOL(operator_minus); // a - b
 DECLARE_STRUPLE_SYMBOL(operator_mul) // a * b
 DECLARE_STRUPLE_SYMBOL(operator_div) // a / b
 DECLARE_STRUPLE_SYMBOL(operator_mod) // a % b
-DECLARE_STRUPLE_SYMBOL(operator_bitand) // a & b
-DECLARE_STRUPLE_SYMBOL(operator_bitor) // a | b
-DECLARE_STRUPLE_SYMBOL(operator_xor) // a ^ b
-DECLARE_STRUPLE_SYMBOL(operator_compl) // a ~ b
+DECLARE_STRUPLE_SYMBOL(operator_amp) // a & b
+DECLARE_STRUPLE_SYMBOL(operator_pipe) // a | b
+DECLARE_STRUPLE_SYMBOL(operator_hat) // a ^ b
+DECLARE_STRUPLE_SYMBOL(operator_tilde) // a ~ b
 DECLARE_STRUPLE_SYMBOL(operator_lshift) // a << b
 DECLARE_STRUPLE_SYMBOL(operator_rshift) // a >> b
 
@@ -1456,7 +1655,7 @@ DECLARE_STRUPLE_SYMBOL(operator_less) // a < b
 DECLARE_STRUPLE_SYMBOL(operator_less_eq) // a <= b
 DECLARE_STRUPLE_SYMBOL(operator_greater) // a > b
 DECLARE_STRUPLE_SYMBOL(operator_greater_eq) // a >= b
-DECLARE_STRUPLE_SYMBOL(operator_spaceship) // a <=> b
+DECLARE_STRUPLE_SYMBOL(operator_comp) // a <=> b
 
 // Assignment
 DECLARE_STRUPLE_SYMBOL(operator_assign) // a = b
@@ -1467,16 +1666,24 @@ DECLARE_STRUPLE_SYMBOL(operator_div_assign) // a /= b
 DECLARE_STRUPLE_SYMBOL(operator_mod_assign) // a %= b
 DECLARE_STRUPLE_SYMBOL(operator_lshift_assign) // a <<= b
 DECLARE_STRUPLE_SYMBOL(operator_rshift_assign) // a >>= b
-DECLARE_STRUPLE_SYMBOL(operator_bitand_assign) // a &= b
-DECLARE_STRUPLE_SYMBOL(operator_bitor_assign) // a |= b
-DECLARE_STRUPLE_SYMBOL(operator_xor_assign) // a ^= b
+DECLARE_STRUPLE_SYMBOL(operator_amp_assign) // a &= b
+DECLARE_STRUPLE_SYMBOL(operator_pipe_assign) // a |= b
+DECLARE_STRUPLE_SYMBOL(operator_hat_assign) // a ^= b
 
 // Other
 DECLARE_STRUPLE_SYMBOL(operator_type); // (type)a
-DECLARE_STRUPLE_SYMBOL(operator_parentheses); // a(b)
+DECLARE_STRUPLE_SYMBOL(operator_paren); // a(b)
 DECLARE_STRUPLE_SYMBOL(operator_comma); // a,b
-DECLARE_STRUPLE_SYMBOL(operator_dtor); // a.~a()
+DECLARE_STRUPLE_SYMBOL(operator_ctor); // A()
+DECLARE_STRUPLE_SYMBOL(operator_dtor); // a.~A()
+DECLARE_STRUPLE_SYMBOL(operator_swap); // swap(a, b)
 
+// Reserved keywords
+DECLARE_STRUPLE_SYMBOL(_); // Reserved member name for library generated clazzes
+DECLARE_STRUPLE_SYMBOL(index);
+DECLARE_STRUPLE_SYMBOL(size);
+
+namespace CLAZZ_NS {
 // Get by index
 template<size_t I, Clazz C>
 requires Variable<typename meta_values_t<C>::template index_symbol_t<I>>
@@ -1488,25 +1695,25 @@ constexpr inline decltype(auto) get(C&& c) noexcept {
 template<size_t I, Clazz C>
 requires StaticValue<typename meta_values_t<C>::template index_symbol_t<I>>
 constexpr inline decltype(auto) get(C&& c) noexcept {
-    using symbol_t = typename meta_clazz_t<C>::template index_symbol_t<I>;
+    using symbol_t = typename clazz_info<C>::template index_symbol_t<I>;
     return symbol_info<symbol_t>::invoke();
 }
 
 // Get variable by tag
 template<Tag tag, Clazz C>
-requires meta_clazz_t<C>::template has_tag<tag> 
-      && Variable<typename meta_clazz_t<C>::template tag_symbol_t<tag>>
+requires clazz_info<C>::template has_tag<tag> 
+      && Variable<typename clazz_info<C>::template tag_symbol_t<tag>>
 constexpr inline decltype(auto) get(C&& c) noexcept {
-    using symbol_t = typename meta_clazz_t<C>::template tag_symbol_t<tag>;
+    using symbol_t = typename clazz_info<C>::template tag_symbol_t<tag>;
     return symbol_info<symbol_t>::invoke(std::forward<C>(c));
 }
 
 // Get static value by tag
 template<Tag tag, Clazz C>
-requires meta_clazz_t<C>::template has_tag<tag> 
-      && StaticValue<typename meta_clazz_t<C>::template tag_symbol_t<tag>>
+requires clazz_info<C>::template has_tag<tag> 
+      && StaticValue<typename clazz_info<C>::template tag_symbol_t<tag>>
 constexpr inline auto get(C&& c) noexcept {
-    using symbol_t = typename meta_clazz_t<C>::template tag_symbol_t<tag>;
+    using symbol_t = typename clazz_info<C>::template tag_symbol_t<tag>;
     return symbol_info<symbol_t>::invoke();
 }
 
@@ -1542,7 +1749,7 @@ constexpr inline auto tie(C&& c) noexcept {
 
 // Tie a super clazz by Tags
 template<Tag... Tags, Clazz C>
-requires sizeof...(Tags) > 1 && (meta_clazz_t<C>::template has_tag<Tags> && ...)
+requires sizeof...(Tags) > 1 && (clazz_info<C>::template has_tag<Tags> && ...)
 constexpr inline auto tie(C&& c) noexcept {
     using clazz_t = clazz<
         std::conditional_t<
@@ -1556,60 +1763,146 @@ constexpr inline auto tie(C&& c) noexcept {
 
 // Try get values by tag
 template<Tag tag, Clazz C, class T>
-requires !meta_clazz_t<C>::template has_tag<tag> 
+requires !clazz_info<C>::template has_tag<tag> 
 constexpr inline auto get_or(C&&, T&& in) noexcept {
     return std::forward<T>(in);
 }
 
 template<Tag tag, Clazz C, class T>
-requires meta_clazz_t<C>::template has_tag<tag> 
-      && Value<typename meta_clazz_t<C>::template tag_symbol_t<tag>>
+requires clazz_info<C>::template has_tag<tag> 
+      && Value<typename clazz_info<C>::template tag_symbol_t<tag>>
 constexpr inline decltype(auto) get_or(C&& c, T&&) noexcept {
     return get<tag>(std::forward<C>(c));
 }
 
+template<Value... X, class F>
+constexpr inline auto map(const clazz<X...>& c, F&& f) {
+    using clazz_t = clazz <
+        typename symbol_tag_info<X>::template var_t<std::invoke_result_t<F, decltype(get<symbol_tag_t<X>>(c))>>...
+    >;
+    return clazz_t{std::invoke(std::forward<F>(f), get<symbol_tag_t<X>>(c))...};
+}
+
+template<Value... X, class F>
+constexpr inline auto map(clazz<X...>&& c, F&& f) {
+    using clazz_t = clazz <
+        typename symbol_tag_info<X>::template var_t<std::invoke_result_t<F, decltype(get<symbol_tag_t<X>>(c))>>...
+    >;
+    return clazz_t{std::invoke(std::forward<F>(f), get<symbol_tag_t<X>>(std::move(c)))...};
+}
+
+auto it = []<class T>(T&& in) { return std::forward<T>(in); };
+auto _ = [](auto&&){};
+
+namespace detail {
+    template<Value... X>
+    struct clazz_map_helper {
+        template<class... T>
+        using invokes_apply_t = clazz <
+            std::conditional_t <
+                std::is_same_v<T, void>,
+                std::tuple<>,
+                typename symbol_tag_info<X>::template var_t<T>
+            >...
+        >;
+    };
+}
+
+template<Value... X, class... F>
+requires sizeof...(X) == sizeof...(F)
+constexpr inline auto map(const clazz<X...>& c, F&&... f) {
+    using invokes_t = std::tuple<std::invoke_result_t<F, decltype(get<symbol_tag_t<X>>(c))>...>;
+    // using clazz_t = apply_tuple_t<invokes_t, typename detail::clazz_map_helper<X...>::template invokes_apply_t>;
+    using clazz_t = clazz <
+        std::conditional_t <
+            std::is_same_v<std::invoke_result_t<F, decltype(get<symbol_tag_t<X>>(c))>, void>,
+            std::tuple<>,
+            typename symbol_tag_info<X>::template var_t<std::invoke_result_t<F, decltype(get<symbol_tag_t<X>>(c))>>
+        >...
+    >;
+
+    return [&]<Value... V, SetPlaceholder... Fs>(clazz_info<clazz<V...>>, 
+                                                 detail::set::placeholder_collection<Fs...>&& fs) {
+        return clazz_t{std::invoke(
+            std::get<0>(std::move(fs).template get_tuple<symbol_tag_t<V>>()), 
+            get<symbol_tag_t<V>>(c))...};
+    }(clazz_info<clazz_t>{}, detail::set::placeholder_collection{symbol_tag_info<X>::set(std::forward<F>(f))...});
+}
+
+template<Tag... Tags, Clazz C, class... F>
+requires sizeof...(Tags) == sizeof...(F) 
+      && (clazz_info<C>::template has_tag<Tags> && ...)
+constexpr inline auto xmap(C&& c, F&&... f) {
+    using invokes_t = std::tuple<std::invoke_result_t<F, decltype(get<Tags>(std::forward<C>(c)))>...>;
+    // using clazz_t = apply_tuple_t<invokes_t, typename detail::clazz_map_helper<X...>::template invokes_apply_t>;
+    using clazz_t = clazz <
+        std::conditional_t <
+            std::is_same_v<std::invoke_result_t<F, decltype(get<Tags>(std::forward<C>(c)))>, void>,
+            std::tuple<>,
+            typename tag_info<Tags>::template var_t<std::invoke_result_t<F, decltype(get<Tags>(std::forward<C>(c)))>>
+        >...
+    >;
+
+    return [&]<Value... V, SetPlaceholder... Fs>(clazz_info<clazz<V...>>, 
+                                                 detail::set::placeholder_collection<Fs...>&& fs) {
+        return clazz_t{std::invoke(
+            std::get<0>(std::move(fs).template get_tuple<symbol_tag_t<V>>()), 
+            get<symbol_tag_t<V>>(c))...};
+    }(clazz_info<clazz_t>{}, detail::set::placeholder_collection{tag_info<Tags>::set(std::forward<F>(f))...});
+}
+
 template<Symbol... X>
-struct symbols_info {
+struct clazz_info<clazz<X...>> {
+    template<Symbol S>
+    // using info = symbol_info<symbol_element_t<clazz<X...>, S>>;
+    using info = symbol_info<S>;
+
+    using clazz_t = clazz<X...>;
+    using meta_clazz_t = meta_clazz<X...>;
+
     static constexpr size_t size = sizeof...(X);
 
     template<Symbol S>
-    static constexpr bool has_symbol = (symbol_info<X>::template shares_dec<S> || ...);
+    static constexpr bool has_symbol = (info<X>::template shares_dec<S> || ...);
     
     template<class Struct>
-    static constexpr bool importable = ((EmptySymbol<X> || tag_info<symbol_tag_t<X>>::template has_mem_var<std::decay_t<Struct>>) && ...);
+    static constexpr bool importable = ((EmptySymbol<X> || symbol_tag_info<X>::template has_mem_var<std::decay_t<Struct>>) && ...);
+
+    template<class Struct>
+    static constexpr bool partially_importable = ((EmptySymbol<X> || symbol_tag_info<X>::template has_mem_var<std::decay_t<Struct>> || info<X>::has_default_ctor) && ...);
 
     template<Declaration D>
-    static constexpr bool has_dec = (symbol_info<X>::template has_dec<D> || ...);
+    static constexpr bool has_dec = (info<X>::template has_dec<D> || ...);
     
     template<Declaration... Decs>
     static constexpr bool implements = (has_dec<Decs> && ...);
     
     template<Symbol S>
-    static constexpr bool has_dec_of = (symbol_info<X>::template shares_dec<S> || ...);
+    static constexpr bool has_dec_of = (info<X>::template shares_dec<S> || ...);
 
     template<Symbol... S>
     static constexpr bool implements_of = (has_dec_of<S> && ...);
 
     template<Declaration D>
-    static constexpr bool has_co_dec = (symbol_info<X>::template has_wider_dec<D> || ...);
+    static constexpr bool has_co_dec = (info<X>::template has_wider_dec<D> || ...);
     
     template<Declaration... Decs>
     static constexpr bool co_implements = (has_co_dec<Decs> && ...);
 
     template<Symbol S>
-    static constexpr bool has_co_dec_of = (symbol_info<X>::template shares_wider_dec<S> || ...);
+    static constexpr bool has_co_dec_of = (info<X>::template shares_wider_dec<S> || ...);
 
     template<Symbol... S>
     static constexpr bool co_implements_of = (has_co_dec_of<S> && ...);
 
     template<Declaration D>
-    static constexpr bool has_contra_dec = (symbol_info<X>::template has_narrower_dec<D> || ...);
+    static constexpr bool has_contra_dec = (info<X>::template has_narrower_dec<D> || ...);
     
     template<Declaration... Decs>
     static constexpr bool contra_implements = (has_contra_dec<Decs> && ...);
 
     template<Symbol S>
-    static constexpr bool has_contra_dec_of = (symbol_info<X>::template shares_narrower_dec<S> || ...);
+    static constexpr bool has_contra_dec_of = (info<X>::template shares_narrower_dec<S> || ...);
 
     template<Symbol... S>
     static constexpr bool contra_implements_of = (has_contra_dec_of<S> && ...);
@@ -1621,7 +1914,7 @@ struct symbols_info {
     using index_symbol_t = std::tuple_element_t<I, std::tuple<X...>>;
 
     template<size_t I>
-    using index_element_t = typename symbol_info<index_symbol_t<I>>::value_t;
+    using index_element_t = typename info<index_symbol_t<I>>::value_t;
 
     template<size_t I>
     using index_tag_t = symbol_tag_t<index_symbol_t<I>>;
@@ -1634,11 +1927,21 @@ struct symbols_info {
     template<class... Tags>
     using super_meta_clazz_t = meta_clazz<tag_symbol_t<Tags>...>;
 
-    using pod_info_t = bind_to_t<symbols_info, flatten_tuples_t<assign_tuple_t<symbol_tuple_t<X>, X>...>>;
+    template<Symbol... Ts>
+    using clazz_info_wrapper = clazz_info<clazz<Ts...>>;
+
+    using pod_info_t = bind_to_t<clazz_info_wrapper, flatten_tuples_t<assign_tuple_t<symbol_tuple_t<X>, X>...>>;
     static constexpr bool is_pod = (DataSymbol<X> && ...);
 
-    using values_info_t = bind_to_t<symbols_info, flatten_tuples_t<std::conditional_t<Value<X>, std::tuple<X>, std::tuple<>>...>>;
+    using values_info_t = bind_to_t<clazz_info_wrapper, flatten_tuples_t<std::conditional_t<Value<X>, std::tuple<X>, std::tuple<>>...>>;
     static constexpr bool is_values = (Value<X> && ...);
+    
+    using variables_info_t = bind_to_t<clazz_info_wrapper, flatten_tuples_t<std::conditional_t<Variable<X>, std::tuple<X>, std::tuple<>>...>>;
+    static constexpr bool is_variables = (Variable<X> && ...);
+
+    static constexpr bool is_default_assignable = ((!Variable<X> || 
+        std::is_assignable_v<std::add_lvalue_reference_t<typename symbol_info<X>::value_t>, 
+                             std::add_lvalue_reference_t<typename symbol_info<X>::value_t>>) && ...);
 
     template<Tag tag>
     static constexpr bool has_tag = (symbol_info<X>::template has_name<tag> || ...);
@@ -1648,12 +1951,14 @@ struct symbols_info {
 };
 
 template<Symbol... X>
-struct meta_clazz : symbols_info<X...> {
+struct meta_clazz : clazz_info<clazz<X...>> {
     using clazz_t = clazz<X...>;
     using tuple_t = typename clazz_t::tuple_t;
     using meta_clazz_t = meta_clazz;
+    using clazz_info_t = clazz_info<clazz_t>;
 
-    static constexpr size_t size = sizeof...(X);
+#define info_v clazz_info_t::template
+#define info_t typename clazz_info_t::template
     
     static_assert(sizeof(tuple_t) == sizeof(clazz_t));
     
@@ -1683,23 +1988,14 @@ struct meta_clazz : symbols_info<X...> {
         static_assert(sizeof(tuple_t) == sizeof(meta_clazz_t));
     }
 
-    template<Symbol S>
-    static constexpr bool has_symbol = (symbol_info<X>::template shares_dec<S> || ...);
-    
     template<class Struct>
-    static constexpr bool importable = ((EmptySymbol<X> || tag_info<symbol_tag_t<X>>::template has_mem_var<std::decay_t<Struct>>) && ...);
-
-    template<class Struct>
-    requires !Clazz<Struct> && importable<Struct>
+    requires !Clazz<Struct> && info_v importable<Struct>
     static constexpr clazz_t import(Struct&& in) noexcept {
         return make_clazz(indices_of_vars_t<X...>{}, std::forward<Struct>(in));
     }
 
     template<class Struct>
-    static constexpr bool partially_importable = ((EmptySymbol<X> || tag_info<symbol_tag_t<X>>::template has_mem_var<std::decay_t<Struct>> || symbol_info<X>::has_default_ctor) && ...);
-
-    template<class Struct>
-    requires !Clazz<Struct> && partially_importable<Struct>
+    requires !Clazz<Struct> && info_v partially_importable<Struct>
     static constexpr clazz_t import_with_defaults(Struct&& in) noexcept { 
         return make_clazz_with_defaults(indices_of_vars_t<X...>{}, std::forward<Struct>(in));
     }
@@ -1713,24 +2009,24 @@ struct meta_clazz : symbols_info<X...> {
 private:
     template<size_t... I, class Struct>
     static constexpr auto make_clazz(std::index_sequence<I...>, Struct&& in) noexcept {
-        return clazz_t(symbol_info<index_symbol_t<I>>::extract_compatible_value(std::forward<Struct>(in))...);
+        return clazz_t(symbol_info<info_t index_symbol_t<I>>::extract_compatible_value(std::forward<Struct>(in))...);
     }
 
     template<size_t... I, class Struct>
     static constexpr auto make_clazz_with_defaults(std::index_sequence<I...>, Struct&& in) noexcept {
-        using extractible_tuple_t = flatten_tuples_t<std::conditional_t<tag_info<index_tag_t<I>>::template has_mem_var<std::decay_t<Struct>>, std::tuple<std::index_sequence<I>>, std::tuple<>>...>;
+        using extractible_tuple_t = flatten_tuples_t<std::conditional_t<tag_info<info_t index_tag_t<I>>::template has_mem_var<std::decay_t<Struct>>, std::tuple<std::index_sequence<I>>, std::tuple<>>...>;
         using extractible_indices_t = bind_to_t<flatten_indices_t, extractible_tuple_t>;
         return make_clazz_with_defaults_2(extractible_indices_t{}, std::forward<Struct>(in));
     }
 
     template<size_t... I, class Struct>
     static constexpr auto make_clazz_with_defaults_2(std::index_sequence<I...>, Struct&& in) noexcept {
-        return clazz_t(tag_info<index_tag_t<I>>::set_placeholder = symbol_info<index_symbol_t<I>>::extract_compatible_value(std::forward<Struct>(in))...);
+        return clazz_t(tag_info<info_t index_tag_t<I>>::set = symbol_info<info_t index_symbol_t<I>>::extract_compatible_value(std::forward<Struct>(in))...);
     }
 
     template<size_t... I, class Struct>
     static constexpr auto make_partial_clazz(std::index_sequence<I...>, Struct&& in) noexcept {
-        using extractible_symbols_t = flatten_tuples_t<std::conditional_t<tag_info<symbol_tag_t<index_symbol_t<I>>>::template has_mem_var<std::decay_t<Struct>>, std::tuple<index_symbol_t<I>>, std::tuple<>>...>;
+        using extractible_symbols_t = flatten_tuples_t<std::conditional_t<tag_info<info_t index_tag_t<I>>::template has_mem_var<std::decay_t<Struct>>, std::tuple<info_t index_symbol_t<I>>, std::tuple<>>...>;
         using partial_meta_clazz_t = bind_to_t<meta_clazz, extractible_symbols_t>;
         return partial_meta_clazz_t::import(std::forward<Struct>(in));
     }
@@ -1756,62 +2052,6 @@ public:
         return std::move(tuple);
     }
 
-    template<Declaration D>
-    static constexpr bool has_dec = (symbol_info<X>::template has_dec<D> || ...);
-    
-    template<Declaration... Decs>
-    static constexpr bool implements = (has_dec<Decs> && ...);
-    
-    template<Symbol S>
-    static constexpr bool has_dec_of = (symbol_info<X>::template shares_dec<S> || ...);
-
-    template<Symbol... S>
-    static constexpr bool implements_of = (has_dec_of<S> && ...);
-
-    template<Declaration D>
-    static constexpr bool has_co_dec = (symbol_info<X>::template has_wider_dec<D> || ...);
-    
-    template<Declaration... Decs>
-    static constexpr bool co_implements = (has_co_dec<Decs> && ...);
-
-    template<Symbol S>
-    static constexpr bool has_co_dec_of = (symbol_info<X>::template shares_wider_dec<S> || ...);
-
-    template<Symbol... S>
-    static constexpr bool co_implements_of = (has_co_dec_of<S> && ...);
-
-    template<Declaration D>
-    static constexpr bool has_contra_dec = (symbol_info<X>::template has_narrower_dec<D> || ...);
-    
-    template<Declaration... Decs>
-    static constexpr bool contra_implements = (has_contra_dec<Decs> && ...);
-
-    template<Symbol S>
-    static constexpr bool has_contra_dec_of = (symbol_info<X>::template shares_narrower_dec<S> || ...);
-
-    template<Symbol... S>
-    static constexpr bool contra_implements_of = (has_contra_dec_of<S> && ...);
-
-    template<Tag tag>
-    using tag_symbol_t = std::tuple_element_t<index_of<tag, X...>::value, std::tuple<X...>>;
-
-    template<size_t I>
-    using index_symbol_t = std::tuple_element_t<I, std::tuple<X...>>;
-
-    template<size_t I>
-    using index_element_t = typename symbol_info<index_symbol_t<I>>::value_t;
-
-    template<size_t I>
-    using index_tag_t = symbol_tag_t<index_symbol_t<I>>;
-
-    template<Tag tag>
-    static constexpr size_t tag_index = index_of<tag, X...>::value;
-
-    using tags_info_t = tags_info<symbol_tag_t<X>...>;
-
-    template<class... Tags>
-    using super_meta_clazz_t = meta_clazz<tag_symbol_t<Tags>...>;
-
     using meta_pod_t = bind_to_t<meta_clazz, flatten_tuples_t<assign_tuple_t<symbol_tuple_t<X>, X>...>>;
     static constexpr bool is_pod = (DataSymbol<X> && ...);
 
@@ -1833,17 +2073,17 @@ public:
     // Get by index
     template<size_t I>
     constexpr inline decltype(auto) get() & {
-        return ::get<I>(fields);
+        return CLAZZ_NS::get<I>(fields);
     }
 
     template<size_t I>
     constexpr inline decltype(auto) get() const & {
-        return ::get<I>(fields);
+        return CLAZZ_NS::get<I>(fields);
     }
 
     template<size_t I>
     constexpr inline decltype(auto) get() && {
-        return ::get<I>(std::move(fields));
+        return CLAZZ_NS::get<I>(std::move(fields));
     }
 
     template<Tag tag>
@@ -1852,52 +2092,53 @@ public:
     // Get variable by tag
     template<Tag tag>
     constexpr inline decltype(auto) get() & noexcept {
-        return ::get<tag>(fields);
+        return CLAZZ_NS::get<tag>(fields);
     }
 
     template<Tag tag>
     constexpr inline decltype(auto) get() const & noexcept {
-        return ::get<tag>(fields);
+        return CLAZZ_NS::get<tag>(fields);
     }
 
     template<Tag tag>
     constexpr inline decltype(auto) get() && noexcept {
-        return ::get<tag>(std::move(fields));
+        return CLAZZ_NS::get<tag>(std::move(fields));
     }
 
     // Get static value by tag
     template<Tag tag>
     constexpr inline auto get() const noexcept {
-        return ::get<tag>(fields);
+        return CLAZZ_NS::get<tag>(fields);
     }
 
     // Try get values by tag
     template<Tag tag, class T>
-    requires !has_tag<tag>
+    requires !info_v has_tag<tag>
     constexpr inline auto get_or(T&& in) const noexcept {
         return std::forward<T>(in);
     }
 
     template<Tag tag, class T>
-    requires has_tag<tag> && Value<tag_symbol_t<tag>>
+    requires info_v has_tag<tag> && Value<info_t tag_symbol_t<tag>>
     constexpr inline decltype(auto) get_or(T&&) & noexcept {
         return get<tag>();
     }
 
     template<Tag tag, class T>
-    requires has_tag<tag> && Value<tag_symbol_t<tag>>
+    requires info_v has_tag<tag> && Value<info_t tag_symbol_t<tag>>
     constexpr inline decltype(auto) get_or(T&&) const & noexcept {
         return get<tag>();
     }
 
     template<Tag tag, class T>
-    requires has_tag<tag> && Value<tag_symbol_t<tag>>
+    requires info_v has_tag<tag> && Value<info_t tag_symbol_t<tag>>
     constexpr inline decltype(auto) get_or(T&&) && noexcept {
         return get<tag>();
     }
 
     template<Tag tag>
-    static constexpr bool is_clazz_var = Variable<tag_symbol_t<tag>> && Clazz<std::tuple_element_t<0, symbol_tuple_t<tag_symbol_t<tag>>>>;
+    static constexpr bool is_clazz_var = Variable<info_t tag_symbol_t<tag>> 
+                                      && Clazz<std::tuple_element_t<0, symbol_tuple_t<info_t tag_symbol_t<tag>>>>;
 
     // Matching
     template<class F>
@@ -1908,9 +2149,9 @@ public:
     }
 
     template<class... Tags, class F>
-    requires sizeof...(Tags) > 0 && (Variable<tag_symbol_t<Tags>> && ...)
+    requires sizeof...(Tags) > 0 && (Variable<info_t tag_symbol_t<Tags>> && ...)
     constexpr inline void for_each_as_var(F&& f) {
-        (std::invoke(std::forward<F>(f), union_cast<tag_symbol_t<Tags>&>(get<Tags>())), ...);
+        (std::invoke(std::forward<F>(f), static_cast<info_t tag_symbol_t<Tags>&>(fields)), ...);
     }
 
     template<class F>
@@ -1928,18 +2169,18 @@ public:
     }
 
     template<class... Tags, class F>
-    requires sizeof...(Tags) > 0 && (Value<tag_symbol_t<Tags>> && ...)
+    requires sizeof...(Tags) > 0 && (Value<info_t tag_symbol_t<Tags>> && ...)
     constexpr inline void for_each(F&& f) {
         (std::invoke(std::forward<F>(f), get<Tags>()), ...);
     }
 
     template<class... tag>
-    constexpr inline clazz<tag_symbol_t<tag>...> super_clazz() const & {
+    constexpr inline clazz<info_t tag_symbol_t<tag>...> super_clazz() const & {
         return *this;
     }
 
     template<class... tag>
-    constexpr inline clazz<tag_symbol_t<tag>...> super_clazz() && {
+    constexpr inline clazz<info_t tag_symbol_t<tag>...> super_clazz() && {
         return std::move(*this);
     }
 
@@ -1954,6 +2195,15 @@ public:
     constexpr inline decltype(auto) call(F&& f, Ts&&... params) const {
         return std::invoke(std::forward<F>(f), fields, std::forward<Ts>(params)...);
     }
+
+    template<class F>
+    requires (Variable<X> && ...)
+    constexpr inline auto map(F&& f) const {
+        return CLAZZ_NS::map(fields, std::forward<F>(f));
+    }
+
+#undef info_t
+#undef info_v
 };
 
 template<class, class>
@@ -2069,13 +2319,16 @@ struct shared_vars<clazz<Ls...>, clazz<Rs...>> {
 template<Clazz L, Clazz R>
 using l_clazz_comparator_t = typename shared_vars<L, R>::l_clazz_comparator_t;
 
-/* Objective less than comparison between two clazzes which share at least one value field
+/* Objective less than comparison between two clazzes
  * Field order for the comparison operation is defined by the order of the fields in the clazz:
  * (1) which has less value fields, or else the clazz:
  * (2) which has the names of the shared value fields in a lower lexicographical order
  *
  * When values of the respective shared value fields are equal between two instances, the instance
- * of the clazz with fewer value fields is seen as less than the other.
+ * of the clazz:
+ * (1) which has fewer value fields, or else the clazz: 
+ * (2) with the names of mutually exclusive value fields in a lower lexicographical order
+ * is seen as less than the other.
  *
  * Examples:
  *
@@ -2086,20 +2339,20 @@ using l_clazz_comparator_t = typename shared_vars<L, R>::l_clazz_comparator_t;
  * If lhs.a == rhs.a && lhs.b == rhs.b, then lhs < rhs
  * Why: LHS has fewer value fields
  *
- * For operation between two clazzes, LHS and RHS, with the value fields named: LHS{e, b, a, d} and RHS{e, a, b, c} 
+ * For operation between two clazzes, LHS and RHS, with the value fields named: LHS{e, b, a, c} and RHS{e, a, b, d} 
  * (2) lhs < rhs => RHS defines order of comparison, i.e. field e compared first then a, then b
  *                  c and d are disregarded, as it is mutually exclusive between two clazzes
  * Why: LHS and RHS have the same number of value fields
  *  BUT LHS and RHS share fields named {a, b, e}
  *  AND the order of shared value fields on RHS are lexicographically less than the order of shared value fields on RHS
  *  i.e. ["e", "a", "b"] < ["e", "b", "a"]
- * If lhs.e == rhs.e && lhs.a == rhs.a && lhs.b == rhs.b, then lhs < rhs returns false 
- * Why: LHS and RHS have the same number of value fields (in this case, lhs == rhs)
+ * If lhs.e == rhs.e && lhs.a == rhs.a && lhs.b == rhs.b, then lhs < rhs
+ * Why: LHS and RHS have the same number of value fields, but the mutually exclusive fields ["c"] < ["d"]
  */
 template<Clazz L, Clazz R>
 constexpr bool strong_less_than(const L& l, const R& r) {
-    constexpr auto lsize = meta_clazz_t<L>::meta_values_t::size;
-    constexpr auto rsize = meta_clazz_t<L>::meta_values_t::size;
+    constexpr auto lsize = clazz_info<L>::values_info_t::size;
+    constexpr auto rsize = clazz_info<L>::values_info_t::size;
     if constexpr (lsize < rsize)
         return l_clazz_comparator_t<L, R>::strong_less_than(l, r);
     else if constexpr (lsize > rsize)
@@ -2189,28 +2442,6 @@ size_t hash(const C& c) {
     return seed;
 }
 
-namespace std {
-    template<size_t I, Clazz C>
-    constexpr inline decltype(auto) get(C&& c) {
-        return ::get<I>(std::forward<C>(c));
-    }
-
-    template<Clazz C>
-    struct tuple_size<C> : std::integral_constant<size_t, meta_values_t<C>::size> {};
-
-    template<size_t N, Clazz C>
-    struct tuple_element<N, C> {
-        using type = typename meta_values_t<C>::template index_element_t<N>;
-    };
-
-    template<Clazz C>
-    struct hash<C> {
-        size_t operator()(const C& c) const {
-            return ::hash(c);
-        }
-    };
-}
-
 template<Symbol... X>
 struct clazz : struple<clazz<X...>, X...> {
     using struple_t = struple<clazz<X...>, X...>;
@@ -2220,17 +2451,13 @@ struct clazz : struple<clazz<X...>, X...> {
     static_assert(sizeof(struple_t) == sizeof(tuple_t));
     
     static_assert(assert_unique_symbol_names<X...>::value, "Fields names are not unique.");
-    
-    // Listing variables
-    template<class... Ts>
-    constexpr clazz(Ts&&... in) noexcept : struple_t(std::forward<Ts>(in)...) {}
-    
+                
     // Construct with a struct with the necessary fields of the same name
     template<class Struct>
     requires !Clazz<Struct> // Is not a class
-          && (tag_info<symbol_tag_t<X>>::template has_mem_var<std::decay_t<Struct>> || ...) // Has at least one matching field
-          && ((tag_info<symbol_tag_t<X>>::template has_mem_var<std::decay_t<Struct>>
-            || symbol_info<X>::has_default_ctor) && ...) // Has matching fields were no default ctors are defined
+          && (symbol_tag_info<X>::template has_mem_var<std::decay_t<Struct>> || ...) // Has at least one matching field
+          && ((symbol_tag_info<X>::template has_mem_var<std::decay_t<Struct>>
+            || symbol_info<X>::has_default_ctor) && ...) // Has all matching fields were no default ctors are defined
     constexpr clazz(Struct&& s) noexcept : clazz{meta_clazz_t::import_with_defaults(std::forward<Struct>(s))} {}
     
     // Construct with "designated initialiser" style set syntax
@@ -2245,84 +2472,196 @@ struct clazz : struple<clazz<X...>, X...> {
 
     // Construct from tuple with the same number of fields as we have data fields
     template<Tuple T>
-    requires std::tuple_size<std::decay_t<T>>::value == symbols_info<X...>::pod_info_t::size
+    requires std::tuple_size<std::decay_t<T>>::value == clazz_info<clazz>::pod_info_t::size
     constexpr clazz(T&& tuple) noexcept : clazz{std::make_from_tuple<clazz>(std::forward<T>(tuple))} {}
 
+private:
+    struct use_struple_ctor_tag{};
+
+    template<class... Ts>
+    constexpr clazz(use_struple_ctor_tag, Ts&&... in) noexcept : struple_t(std::forward<Ts>(in)...) {}
+
+public:
+    // Use custom constructor or forward to struple constructor
+    template<class... Ts>
+    constexpr clazz(Ts&&... ins) noexcept : clazz{[&]() -> clazz {
+        if constexpr(clazz_info<clazz>::template has_dec<dec::operator_ctor<clazz(Ts&&...) const>>) {
+            return clazz::operator_ctor(std::forward<Ts>(ins)...);
+        } else {
+            return clazz{use_struple_ctor_tag{}, std::forward<Ts>(ins)...};
+        }
+    }()} {}
+
     constexpr inline auto operator->() {
-        if constexpr (meta_clazz_t::template has_co_dec<dec::operator_points_to<void()>>)
-            return this->operator_points_to();
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_pointer<void()>>)
+            return this->operator_pointer();
         else 
             return &meta_clazz_of(*this);
     }
 
     constexpr inline auto operator->() const {
-        if constexpr (meta_clazz_t::template has_co_dec<dec::operator_points_to<void() const>>)
-            return this->operator_points_to();
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_pointer<void() const>>)
+            return this->operator_pointer();
         else
             return &meta_clazz_of(*this);
     }
 
+    constexpr decltype(auto) operator=(clazz&& other) 
+    requires clazz_info<clazz>::is_default_assignable
+          || clazz_info<clazz>::template has_co_dec<dec::operator_assign<void(clazz&&)>>
+    {
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_assign<void(clazz&&)>>) {
+            using return_t = decltype(this->operator_assign(std::move(other)));
+            if constexpr (std::is_same_v<void, return_t>) {
+                this->operator_assign(std::move(other));
+                return *this;
+            } else {
+                return this->operator_assign(std::move(other));
+            }
+        } else {
+            [this, &other]<Variable... V>(clazz_info<clazz<V...>>) {
+                ((get<symbol_tag_t<V>>(*this) =
+                    std::forward<typename symbol_info<V>::value_t>(get<symbol_tag_t<V>>(other))), ...);
+            }(typename clazz_info<clazz>::variables_info_t{});
+            return *this;
+        }
+    }
+
+    constexpr decltype(auto) operator=(const clazz& other) 
+    requires clazz_info<clazz>::is_default_assignable
+          || clazz_info<clazz>::template has_co_dec<dec::operator_assign<void(clazz&&)>> 
+    {
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_assign<void(const clazz&)>>) {
+            using return_t = decltype(this->operator_assign(other));
+            if constexpr (std::is_same_v<void, return_t>) {
+                this->operator_assign(other);
+                return *this;
+            } else {
+                return this->operator_assign(other);
+            }
+        } else {
+            [this, &other]<Variable... V>(clazz_info<clazz<V...>>) {
+                ((get<symbol_tag_t<V>>(*this) = get<symbol_tag_t<V>>(other)), ...);
+            }(typename clazz_info<clazz>::variables_info_t{});
+            return *this;
+        }
+    }
+
+    // Custom clazz swap for same instance
+    friend void swap(clazz& l, clazz& r) {
+        if constexpr (clazz_info<clazz>::template has_dec<dec::operator_swap<void(clazz&)>>) {
+            l.operator_swap(r);
+        } else {
+            [&]<Variable... V>(clazz_info<clazz<V...>>) {
+                using std::swap;
+                (swap(get<symbol_tag_t<V>>(l), get<symbol_tag_t<V>>(r)), ...);
+            }(typename clazz_info<clazz>::variables_info_t{});
+            std::cout << "inner friend swapped\n";
+        }
+    }
+
+    // Custom clazz swap for clazzes with the same variables
+    template<Clazz R>
+    requires ClazzOf<typename clazz_info<clazz>::variables_info_t::clazz_t, 
+                     typename clazz_info<R>::variables_info_t::clazz_t>
+    friend void swap(clazz& l, R& r) {
+        if constexpr (clazz_info<clazz>::template has_dec<dec::operator_swap<void(R&)>>) {
+            l.operator_swap(r);
+        } else {
+            [&]<Variable... V>(clazz_info<clazz<V...>>) {
+                using std::swap;
+                (swap(get<symbol_tag_t<V>>(l), get<symbol_tag_t<V>>(r)), ...);
+            }(typename clazz_info<clazz>::variables_info_t{});
+            std::cout << "general inner friend swapped\n";
+        }
+    }
+
+    // inline clazz& operator=(clazz&& other) {
+    //     meta_clazz_of(*this).tuple = std::move(meta_clazz_of(other).tuple);
+    //     return *this;
+    // }
+
+    // inline clazz& operator=(const clazz& other) {
+    //     meta_clazz_of(*this).tuple = meta_clazz_of(other).tuple;
+    //     return *this;
+    // }
+
     // TODO: Find way of making destructor conditionally non-trival for constexpr purposes
     // ~clazz() noexcept {
-    //     if constexpr (meta_clazz_t::template has_dec<dec::operator_dtor<void()>>)
+    //     if constexpr (clazz_info<clazz>::template has_dec<dec::operator_dtor<void()>>)
     //         this->operator_dtor();
     // }
 
     template<Clazz T>
-    constexpr inline auto operator==(const T& r) const {
-        if constexpr (meta_clazz_t::template has_co_dec<dec::operator_eq<void(const T&)>>)
+    constexpr inline decltype(auto) operator==(const T& r) const {
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_eq<void(const T&)>>)
             return this->operator_eq(r);
         else
             return strong_equals(*this, r);
     }
 
     template<Clazz T>
-    constexpr inline auto operator!=(const T& r) const {
-        if constexpr (meta_clazz_t::template has_co_dec<dec::operator_not_eq<void(const T&)>>)
+    constexpr inline decltype(auto) operator!=(const T& r) const {
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_not_eq<void(const T&)>>)
             return this->operator_not_eq(r);
         else
             return !strong_equals(*this, r);
     }
 
     template<Clazz T>
-    constexpr inline auto operator<(const T& r) const {
-        if constexpr (meta_clazz_t::template has_co_dec<dec::operator_less<void(const T&)>>)
+    constexpr inline decltype(auto) operator<(const T& r) const {
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_less<void(const T&)>>)
             return this->operator_less(r);
         else
             return strong_less_than(*this, r);
     }
 
     template<Clazz T>
-    constexpr inline auto operator>=(const T& r) const {
-        if constexpr (meta_clazz_t::template has_co_dec<dec::operator_greater_eq<void(const T&)>>)
+    constexpr inline decltype(auto) operator>=(const T& r) const {
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_greater_eq<void(const T&)>>)
             return this->operator_greater_eq(r);
         else
             return !strong_less_than(*this, r);
     }
 
     template<Clazz T>
-    constexpr inline auto operator>(const T& r) const {
-        if constexpr (meta_clazz_t::template has_co_dec<dec::operator_greater<void(const T&)>>)
+    constexpr inline decltype(auto) operator>(const T& r) const {
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_greater<void(const T&)>>)
             return this->operator_greater(r);
         else
             return strong_less_than(r, *this);
     }
 
     template<Clazz T>
-    constexpr inline auto operator<=(const T& r) const {
-        if constexpr (meta_clazz_t::template has_co_dec<dec::operator_less_eq<void(const T&)>>)
+    constexpr inline decltype(auto) operator<=(const T& r) const {
+        if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_less_eq<void(const T&)>>)
             return this->operator_less_eq(r);
         else
             return !strong_less_than(r, *this);
     }
+    
+    // constexpr inline decltype(auto) operator*() {
+    //     if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_deref<void()>>)
+    //         return this->operator_deref();
+    //     else
+    //         return *this;
+    // }
 
-// Have to use macros instead of template variables unfortunately
-// as we don't want to pollute top-level clazz interface
-#define HAS_CO_DEC(dec) (symbol_info<X>::template has_wider_dec<dec> || ...)
-
-#undef HAS_CO_DEC
+    // constexpr inline decltype(auto) operator*() const {
+    //     if constexpr (clazz_info<clazz>::template has_co_dec<dec::operator_deref<void() const>>)
+    //         return this->operator_deref();
+    //     else
+    //         return *this;
+    // }
 
 };
+
+template<Clazz L, ClazzOf<L> R>
+void swap(L& l, R& r) {
+    using std::swap;
+    swap(l->tuple, r->tuple);
+    std::cout << "outer friend swapped\n";
+}
 
 template<Clazz C, Tuple T>
 requires std::is_same_v<T, typename meta_clazz_t<C>::tuple_t>
@@ -2336,6 +2675,17 @@ C& as_clazz(T& tuple) {
     return union_cast<C&>(tuple);
 }
 
+template<Clazz C>
+const auto& as_tuple(const C& c) {
+    return meta_clazz_of(c).tuple;
+}
+
+template<Clazz C>
+requires std::is_rvalue_reference_v<C&&>
+const auto&& as_tuple(C&& c) {
+    return std::move(meta_clazz_of(c).tuple);
+}
+
 template<NamedTupleWrapper N, Tuple T>
 auto& as_named_tuple(const T& tuple) {
     using nup_t = bind_to_t<N, T>;
@@ -2346,6 +2696,16 @@ template<NamedTupleWrapper N, Tuple T>
 auto& as_named_tuple(T& tuple) {
     using nup_t = bind_to_t<N, T>;
     return union_cast<nup_t&>(tuple);
+}
+
+template<NamedTupleWrapper N, Tuple T>
+auto& as_nuple(const T& tuple) {
+    return as_named_tuple<nuple>(tuple);
+}
+
+template<NamedTupleWrapper N, Tuple T>
+auto& as_nuple(T& tuple) {
+    return as_named_tuple<nuple>(tuple);
 }
 
 template<class, bool Const, Tag... Tags>
@@ -2364,7 +2724,7 @@ struct view<clazz<X...>, Const> {
     using type = clazz <
         std::conditional_t <
             Variable<X>, 
-            typename tag_info<symbol_tag_t<X>>::template var_t<std::add_lvalue_reference_t<const_t<typename symbol_info<X>::value_t>>>,
+            typename symbol_tag_info<X>::template var_t<std::add_lvalue_reference_t<const_t<typename symbol_info<X>::value_t>>>,
             X
         >...
     >;
@@ -2388,16 +2748,16 @@ using view_t = typename view<T, false, Tags...>::type;
 template<class T, Tag... Tags>
 using const_view_t = typename view<T, true, Tags...>::type;
 
-DECLARE_STRUPLE_SYMBOL(variant_index);
-
 template<Declaration... Ds>
 struct trait {
     template<Clazz C>
-    static constexpr bool co_implementor = meta_clazz_t<C>::template co_implements<Ds...>;
+    static constexpr bool co_implementor = clazz_info<C>::template co_implements<Ds...>;
 
     template<CoImplements<Ds...>... Variants>
     using variant_clazz_t = clazz < 
-        var :: variant_index <unsigned char const>,
+        // Variant index stored under object._.size
+        var :: _ < clazz < var::index<unsigned char const> > >,
+        // All trait defs callable with object.trait_def(...)
         typename dec_info<Ds>::template variant_def_t<Variants...>...
     >;
 };
@@ -2425,45 +2785,49 @@ constexpr decltype(auto) vmax(T0&& val1, T1&& val2, Ts&&... vs) {
       vmax(val2, std::forward<Ts>(vs)...);
 }
 
+
 template<Trait Trt, ImplementsTrait<Trt>... Variants>
-class vvector {
-    size_t write_head = 0;
+struct vvector {
+    using size_type = unsigned int;
+    using value_type = typename Trt::template variant_clazz_t<Variants...>;
+    using reference = value_type&;
+    using const_reference = const value_type&;
+
+private:
+    size_type write_head = 0;
     std::vector<char> buffer;
-    std::vector<size_t> positions;
+    std::vector<size_type> positions;
 
 public:
     template<class T>
     void push_back(T&& value) {
-        emplace_back<std::decay_t<T>>(std::forward<T>(value));
+        void(emplace_back<std::decay_t<T>>(std::forward<T>(value)));
     }
     
     template<class T, class... Ts>
     requires is_one_of<T, Variants...>::value
-    void emplace_back(Ts&&... args) {
+    reference emplace_back(Ts&&... args) {
         using variant_t = variant<T>;
-        constexpr size_t value_size = sizeof(variant_t);
+        constexpr size_type value_size = sizeof(variant_t);
         constexpr size_t index = index_of_type<T, Variants...>::value;
 
         positions.push_back(write_head);
         buffer.reserve(write_head + value_size);
         new (&buffer[write_head]) variant_t(index, std::forward<Ts>(args)...);
         write_head += value_size;
+        return back();
     }
     
-    using value_type = typename Trt::template variant_clazz_t<Variants...>;
-    using reference = value_type&;
-    using const_reference = const value_type&;
-
-    reference at(size_t pos) {
+    reference at(size_type pos) {
         return reinterpret_cast<reference>(buffer[positions.at(pos)]);
     }
-    const_reference at(size_t pos) const {
+    const_reference at(size_type pos) const {
         return reinterpret_cast<const_reference>(buffer[positions.at(pos)]);
     }
-    reference operator[](size_t pos) {
+    reference operator[](size_type pos) {
         return reinterpret_cast<reference>(buffer[positions[pos]]);
     }
-    const_reference operator[](size_t pos) const {
+    const_reference operator[](size_type pos) const {
         return reinterpret_cast<const_reference>(buffer[positions[pos]]);
     }
     reference front() {
@@ -2478,7 +2842,7 @@ public:
     const_reference back() const {
         return reinterpret_cast<const_reference>(buffer[positions.back()]);
     }
-    size_t size() const noexcept {
+    size_type size() const noexcept {
         return positions.size();
     }
     size_t data_size() const noexcept {
@@ -2501,7 +2865,7 @@ public:
     }
 
 private:
-    static constexpr size_t var_sizes[] = { sizeof(variant<Variants>)... };
+    static constexpr size_type var_sizes[] = { sizeof(variant<Variants>)... };
 
     template<bool Const>
     class _iterator {
@@ -2514,7 +2878,7 @@ private:
 
         friend container_t;
 
-        size_t pos = 0;
+        size_type pos = 0;
         container_t& underlying;        
 
     public:                
@@ -2542,18 +2906,18 @@ private:
 
 public:
     using iterator = _iterator<false>;
-    using const_interator = _iterator<true>;
+    using const_iterator = _iterator<true>;
 
     inline iterator begin() {
         return {0, *this};
     }
-    inline const_interator cbegin() const {
+    inline const_iterator cbegin() const {
         return {0, *this};
     }
     inline iterator end() {
         return {write_head, *this};
     }
-    inline const_interator cend() const {
+    inline const_iterator cend() const {
         return {write_head, *this};
     }
 
@@ -2585,39 +2949,594 @@ private:
         for (auto& i : self) {
             detail::visit_clazz_variant<void, Variants...>(
                 std::index_sequence_for<Variants...>{},
-                i.variant_index, &i, visitor, out);
+                i._.index, &i, visitor, out);
         }
         return out; 
     }
 
 public:
-    void reserve(size_t elements) {
+    void reserve(size_type elements) {
         constexpr auto max = vmax(0, sizeof(variant<Variants>)...);
         buffer.reserve(max * elements);
         positions.reserve(elements);
     }
 
     vvector() {
-        reserve(16);
+        reserve(14);
     }
 
-    void clear() {
-        // Destruct all variants
+private:
+    void destruct_all() {
         for (auto& i : *this)
             detail::visit_clazz_variant<void, Variants...>(
                 std::index_sequence_for<Variants...>{},
-                i.variant_index, &i,
+                i._.index, &i,
                 []<class T>(T& self) { self.~T(); });
+    }
 
+public:
+    void clear() {
+        destruct_all();
         buffer.clear();
         positions.clear();
     }
 
     ~vvector() {
-        clear();
+        destruct_all();
     }
 };
 
+// Default alignment to cache-line
+template<Pod, size_t Align = 64>
+struct soa;
+
+template<Variable... X, size_t Align>
+struct soa<clazz<X...>, Align> {
+    template<class, size_t>
+    friend struct soa;
+
+    template<template<class...> class Wrapper, Variable S>
+    using mapped_symbol_t = typename symbol_tag_info<S>::template var_t<Wrapper<typename symbol_info<S>::value_t>>;
+
+    // template<class... T>
+    // using container_wrapper = std::vector<T...>;
+
+    // TODO: Do not expose underlying vectors, only std::span (when GCC supports)
+    // using arrays_t = clazz<mapped_symbol_t<container_wrapper, X>...>;
+    // arrays_t arrays;
+
+    using size_type = size_t;
+    using clazz_t = clazz<X...>;
+
+    using value_type = view_t<clazz_t>;
+    using reference = view_t<clazz_t>;
+    using const_reference = const_view_t<clazz_t>;
+
+private:
+    static constexpr size_t _unit_size = (sizeof(typename symbol_info<X>::value_t) + ...);
+
+    using value_types = std::tuple<typename symbol_info<X>::value_t...>;
+
+    template<size_t I>
+    using value_t = std::tuple_element_t<I, value_types>;
+
+    static constexpr auto sizes = []<size_t... I>(std::index_sequence<I...>) {
+        return std::array{sizeof(value_t<I>)...};
+    }(std::index_sequence_for<X...>{});
+
+    using offsets_t = std::array<size_type, sizeof...(X)>;
+    using arrays_t = clazz<mapped_symbol_t<std::add_pointer_t, X>...>;
+
+    template<class T>
+    using data_wrapper_t = std::add_const_t<std::add_pointer_t<T>>;
+
+    using data_t = clazz<
+        var::_<clazz<var::size<const size_type>>>,
+        mapped_symbol_t<data_wrapper_t, X>...
+    >;
+
+    size_type _capacity;
+    size_type _size;
+
+    struct buffer_deleter {
+        void operator()(char* p) { free(p); }
+    };
+
+    using buffer_t = std::unique_ptr<char, buffer_deleter>;
+    buffer_t _buffer;
+    arrays_t _arrays;
+
+    static constexpr size_type default_capacity = 12;
+    static constexpr size_type min_size = 4;
+
+    soa(const offsets_t& offsets, size_type capacity, size_type size)
+        : _capacity{capacity}
+        , _size{size}
+        , _buffer{_create_buffer(offsets, default_capacity)}
+        , _arrays{_create_arrays(_buffer.get(), offsets)}
+    {}
+
+public:
+    soa() : soa{_create_offsets(default_capacity), default_capacity, 0} {}
+
+    soa(const soa& other) 
+        : soa(_create_offsets(other._capacity), other._capacity, other._size)
+    {
+        _for_each(other._buffer.get(), _capacity, [this]<class T>(T* our_buffer, T* other_buffer) {
+            for(size_t i = 0; i < _size; ++i) {
+                new (our_buffer + i) T(other_buffer[i]);
+            }
+        });
+    }
+
+    soa(soa&& other) : soa() {
+        swap(other);
+    }
+
+    void swap(soa& other) {
+        using std::swap;
+        swap(_capacity, other._capacity);
+        swap(_size, other._size);
+        swap(_buffer, other._buffer);
+        swap(_arrays, other._arrays);
+    }
+
+    friend void swap(soa& l, soa& r) {
+        l.swap(r);
+    }
+
+    void reserve(size_type n) {
+        if (n > _capacity) {
+            _resize_buffer(n);
+        }
+    }
+
+    void resize(size_type n) {
+        if (n > _capacity) {
+            _resize_buffer(n);
+        } else if (n < _size) {
+            _for_each([n, this]<class T>(T* array) {
+                if constexpr (!std::is_trivially_destructible_v<T>) {
+                    for(size_type i = n; i < _size; ++i) {
+                        array[i].~T();
+                    }
+                }
+            });
+            _size = n;
+        }
+    }
+
+    void shrink_to_fit() {
+        if (_size < _capacity) {
+            _resize_buffer(std::max(_size, min_size));
+        }
+    }
+
+private:
+    void _grow_if_full() {
+        if (_capacity == _size)
+            _grow_buffer();
+    }
+    void _grow_buffer() {
+        _resize_buffer(_size * 2);
+    }
+
+    void _resize_buffer(size_type capacity) {
+        auto offsets = _create_offsets(capacity);
+        auto new_buffer = _create_buffer(offsets, capacity);
+
+        if (!empty()) {
+            _for_each(new_buffer.get(), offsets, [this]<class T>(T* old_buffer, T* new_buffer) {
+                for (size_t i = 0; i < _size; ++i) {
+                    new (new_buffer + i) T(std::move(old_buffer[i]));
+                    old_buffer[i].~T();
+                }
+            });
+        }
+
+        _buffer = std::move(new_buffer);
+        _arrays = _create_arrays(_buffer.get(), offsets);
+        _capacity = capacity;
+    }
+
+    constexpr offsets_t _create_offsets(size_type capacity) {
+        offsets_t offsets = {0};
+        size_type offset = 0;
+        for (int i = 1; i < sizeof...(X); ++i) {
+            offset += capacity * sizes[i-1];
+            // Add padding if we are aligning
+            if constexpr (Align != 0)
+                offset = (offset + (Align - 1)) & -Align;
+            offsets[i] = offset;
+        }
+        return offsets;
+    }
+
+    buffer_t _create_buffer(const offsets_t& offsets, size_type capacity) {
+        size_type size = offsets.back() + capacity * sizes.back();
+        if constexpr (Align != 0) {
+            char* buffer = (char*)aligned_alloc(Align, (size + (Align - 1)) & -Align);
+            return buffer_t(buffer);
+        } else {
+            char* buffer = (char*)malloc(size);
+            return buffer_t(buffer);
+        }
+    }
+
+    auto _create_arrays(char* buffer, const offsets_t& offsets) {
+        return _create_arrays(std::index_sequence_for<X...>{}, buffer, offsets);
+    }
+
+    template<size_t... I>
+    auto _create_arrays(std::index_sequence<I...>, char* buffer, const offsets_t& offsets) {
+        return arrays_t{_get_array<I>(buffer, offsets)...};
+    }
+
+    template<size_t... I>
+    void _copy_from_buffer(std::index_sequence<I...>, char* other_buffer) {
+        (_copy_from_buffer<I>(
+            _get_array<I>(),
+            _get_array<I>(other_buffer, _capacity)
+            ), ...);
+    }
+    template<size_t I, class T>
+    void _copy_from_buffer(T* our_buffer, T* other_buffer) {
+        for(size_t i = 0; i < _size; ++i) {
+            new (our_buffer + i) T(other_buffer[i]);
+        }
+    }
+
+    template<class F>
+    void _for_each(F&& f) {
+        _for_each(std::index_sequence_for<X...>{}, std::forward<F>(f));
+    }
+    template<size_t... I, class F>
+    void _for_each(std::index_sequence<I...>, F&& f) {
+        (std::invoke(std::forward<F>(f), _get_array<I>()), ...);
+    }  
+    template<class F>
+    void _for_each(char* other_buffer, const offsets_t& other_offsets, F&& f) {
+        _for_each(std::index_sequence_for<X...>{}, other_buffer, other_offsets, std::forward<F>(f));
+    }
+    template<size_t... I, class F>
+    void _for_each(std::index_sequence<I...>, char* other_buffer, const offsets_t& other_offsets, F&& f) {
+        (std::invoke(std::forward<F>(f), _get_array<I>(), _get_array<I>(other_buffer, other_offsets)), ...);
+    }
+    
+    template<class F>
+    decltype(auto) _apply_arrays(F&& f) {
+        return _apply_arrays(std::index_sequence_for<X...>{}, std::forward<F>(f));
+    }
+    template<size_t... I, class F>
+    decltype(auto) _apply_arrays(std::index_sequence<I...>, F&& f) {
+        return std::invoke(std::forward<F>(f), _get_array<I>()...);
+    }
+    template<class F>
+    decltype(auto) _apply_arrays(F&& f) const {
+        return _apply_arrays(std::index_sequence_for<X...>{}, std::forward<F>(f));
+    }
+    template<size_t... I, class F>
+    decltype(auto) _apply_arrays(std::index_sequence<I...>, F&& f) const {
+        return std::invoke(std::forward<F>(f), _get_array<I>()...);
+    }
+
+    template<size_t I>
+    inline value_t<I>* _get_array() {
+        return get<I>(_arrays);
+    }
+    template<size_t I>
+    inline value_t<I>* _get_array(char* buffer, const offsets_t& offsets) {
+        return reinterpret_cast<value_t<I>*>(buffer + offsets[I]);
+    }
+    template<size_t I>
+    const value_t<I>* _get_array() const {
+        return get<I>(_arrays);
+    }
+    template<size_t I>
+    const value_t<I>* _get_array(char* buffer, const offsets_t& offsets) const {
+        return reinterpret_cast<const value_t<I>*>(buffer + offsets[I]);
+    }
+
+public:
+    void push_back(const clazz_t& value) {
+        _grow_if_full();
+
+        _apply_arrays([&, this]<class... T>(T*... array) {
+            (new (array + _size) T(get<symbol_tag_t<X>>(value)), ...);
+        });
+        ++_size;
+    }
+
+    void push_back(clazz_t&& value) {
+        _grow_if_full();
+
+        _apply_arrays([&, this]<class... T>(T*... array) {
+            (new (array + _size) T(get<symbol_tag_t<X>>(std::move(value))), ...);
+        });
+        ++_size;
+    }
+
+    template<class... Ts>
+    void push_back(Ts&&... ins) {
+        push_back(clazz_t{std::forward<Ts>(ins)...});
+    }
+
+    template<class... Ts>
+    requires (SetPlaceholder<Ts> && ...)
+    reference emplace_back(Ts&&... ins) {
+        _grow_if_full();
+
+        auto phc = detail::set::placeholder_collection<Ts...>(std::forward<Ts>(ins)...);
+        _apply_arrays([&, this]<class... T>(T*... array) {
+            (new (array + _size) T(std::make_from_tuple<T>(std::move(phc).template get_tuple<symbol_tag_t<X>>())), ...);
+        });
+        ++_size;
+
+        return back();
+    }
+
+    template<class... Ts>
+    requires (!SetPlaceholder<Ts> && ...)
+    reference emplace_back(Ts&&... ins) {
+        _grow_if_full();
+
+        _apply_arrays([&, this]<class... T>(T*... array) {
+            (new (array + _size) T(std::forward<Ts>(ins)), ...);
+        });
+        ++_size;
+
+        return back();
+    }
+
+    void pop_back() {
+        resize(_size - 1);
+    }
+
+    reference at(size_type pos) {
+        assert(pos < size());
+        return *this[pos];
+    }
+    const_reference at(size_type pos) const {
+        assert(pos < size());
+        return *this[pos];
+    }
+    reference operator[](size_type pos) {
+        return _apply_arrays([=](auto*... array) {
+            return reference{array[pos]...};
+        });
+    }
+    const_reference operator[](size_type pos) const {
+        return _apply_arrays([=](auto*... array) {
+            return const_reference{array[pos]...};
+        });
+    }
+    reference front() {
+        return _apply_arrays([](auto*... array) {
+            return reference{array[0]...};
+        });
+    }
+    const_reference front() const {
+        return _apply_arrays([](auto*... array) {
+            return const_reference{array[0]...};
+        });
+    }
+    reference back() {
+        return _apply_arrays([back = _size - 1](auto*... array) {
+            return reference{array[back]...};
+        });
+    }
+    const_reference back() const {
+        return _apply_arrays([back = _size - 1](auto*... array) {
+            return const_reference{array[back]...};
+        });
+    }
+    data_t data() noexcept {
+        return {_size, get<symbol_tag_t<X>>(_arrays)...};
+    }
+    size_type size() const noexcept {
+        return _size;
+    }
+    size_type capacity() const noexcept {
+        return _capacity;
+    }
+    bool empty() const noexcept {
+        return _size == 0;
+    }
+    void clear() {
+        resize(0);
+    }
+    ~soa() {
+        clear();
+    }
+
+private:
+    template<bool Const>
+    struct _iterator {
+        using difference_type = std::ptrdiff_t;
+        using iterator_category = std::random_access_iterator_tag;
+
+    private:
+        template<class T>
+        using pointer_wrapper = std::conditional_t<Const, 
+                                                   std::add_pointer_t<std::add_const_t<T>>, 
+                                                   std::add_pointer_t<T>>;
+
+        using pointers = clazz <
+            typename soa::template mapped_symbol_t<pointer_wrapper, X>...
+        >;
+
+        template<class T>
+        using reference_wrapper = std::conditional_t<Const, 
+                                                     std::add_lvalue_reference_t<std::add_const_t<T>>, 
+                                                     std::add_lvalue_reference_t<T>>;
+
+        using references = clazz <
+            ovl::operator_assign<
+                // Custom move assignment swaps elements (required for efficient sorting)
+                def::operator_assign<void, []<class T>(T& self, T&& other) {
+                    using std::swap;
+                    (swap(get<symbol_tag_t<X>>(self), get<symbol_tag_t<X>>(other)), ...);
+                    std::cout << "assign swapped\n";
+                }>,
+                def::operator_assign<void, []<class T>(T& self, T& other) {
+                    ((get<symbol_tag_t<X>>(self) = get<symbol_tag_t<X>>(other)), ...);
+                    std::cout << "assign copied\n";
+                }>
+            >,
+            typename soa::template mapped_symbol_t<reference_wrapper, X>...
+        >;
+
+        pointers ptrs;
+
+        template<class... T>
+        _iterator(T*... ptrs_) : ptrs{ptrs_...} {}
+
+        template<class... Ts>
+        _iterator(const _iterator& other) : ptrs{other.ptrs} {}
+
+    public:
+        using value_type = references;
+        using reference = value_type&;
+        using pointer = value_type*;
+
+        _iterator& operator++() {
+            (++get<symbol_tag_t<X>>(ptrs), ...);
+            return *this;
+        }
+
+        _iterator& operator--() {
+            (--get<symbol_tag_t<X>>(ptrs), ...);
+            return *this;
+        }
+
+        _iterator& operator=(const _iterator& other) {
+            ptrs = other.ptrs;
+            return *this;
+        }
+
+        difference_type operator-(const _iterator& other) const {
+            return get<0>(ptrs) - get<0>(other.ptrs);
+        }
+
+        _iterator operator-(int n) const {
+            return _iterator{(get<symbol_tag_t<X>>(ptrs) - n)...};
+        }
+
+        _iterator operator+(int n) const {
+            return _iterator{(get<symbol_tag_t<X>>(ptrs) + n)...};
+        }
+
+        bool operator<(const _iterator& other) const {
+            return get<0>(ptrs) < get<0>(other.ptrs);
+        }
+        
+        inline reference operator*() const {
+            return union_cast<reference>(const_cast<pointers&>(ptrs));
+        }
+
+        inline pointer operator->() const {
+            return &**this;
+        }
+
+        inline bool operator==(const _iterator& other) const {
+            return ptrs == other.ptrs;
+        }
+        
+        inline bool operator!=(const _iterator& other) const {
+            return !(*this == other);
+        }
+    };
+
+public:
+    using iterator = _iterator<false>;
+    using const_iterator = _iterator<true>;
+
+    inline iterator begin() {
+        return _apply_arrays([](auto*... array) {
+            return iterator{array...};
+        });
+    }
+    inline const_iterator cbegin() const {
+        return _apply_arrays([](const auto*... array) {
+            return const_iterator{array...};
+        });
+    }
+    inline iterator end() {
+        return _apply_arrays([this](auto*... array) {
+            return iterator{(array + _size)...};
+        });
+    }
+    inline const_iterator cend() const {
+        return _apply_arrays([this](const auto*... array) {
+            return const_iterator{(array + _size)...};
+        });
+    }
+
+    void sort() {
+        return sort([](const reference& l, const reference& r) {
+            return l < r;
+        });
+    }
+
+    // Since most comparisons during sorting are done on one field of each element, find
+    // the sorted order first, before sorting all of the elements in memory, field by field.
+    // Moving all fields of the elements at once in a single pass sorting process will thrash
+    // the cache, as that is a row-wise process, whereas soa is optimised for column-wise processes.
+    // Once we have found an order, then move the elements in each field/column one-by-one.
+    // Another added benefit will be fewer move operations per element on average, as once we have
+    // found the order, the number of moves required to sort in memory will be less.
+    template<class Comp>
+    requires std::is_invocable_r_v<bool, Comp&&, reference, reference>
+    void sort(Comp&& comp) {
+        // Allocate all the memory needed in one go
+        auto buffer = std::make_unique<size_type[]>(2 * _size);
+        // Divide it up into two arrays
+        size_type* indices = buffer.get();
+        size_type* targets = buffer.get() + _size;
+
+        // Create a list of indices for each element in the soa
+        std::iota(indices, indices + _size, 0);
+        // Find the resulting locations of the indices after the soa is in sorted order
+        std::sort(indices, indices + _size, [&, this](size_type l, size_type r) -> bool {
+            return std::invoke(std::forward<Comp>(comp), (*this)[l], (*this)[r]); 
+        });
+ 
+        // The set of target locations for the underlying elements
+        // is the inverse permutation of the set of sorted indices
+        for (size_type i = 0; i < _size; ++i) {
+            targets[indices[i]] = i;
+        }
+
+        // For each array in this soa, move the elements of into their target positions in memory
+        // Re-use the memory of the now useless indices array for the mutable targets array
+        _for_each([this, targets0 = (const size_type*)targets, targets = indices](auto* array) {
+            // Initialise mutable targets array with the original immutable targets0 array
+            std::copy_n(targets0, _size, targets);
+            // Put the elements of this array into their target position
+            for (size_type i = 0; i < _size; ++i) {
+                while (targets[i] != i) {
+                    using std::swap;
+                    swap(array[i], array[targets[i]]);
+                    swap(targets[i], targets[targets[i]]);
+                }
+            }
+        });
+    }
+
+    template<class... S>
+    bool operator==(const soa<S...>& other) const {
+        if constexpr (sizeof...(S) != sizeof...(X)) return false;
+        else {
+            static_assert((SymbolNamed<S, symbol_tag_t<X>> && ...), "soa's do not share field names");
+            return _size == other._size 
+                && (std::equal(get<symbol_tag_t<X>>(_arrays), 
+                               get<symbol_tag_t<X>>(_arrays) + _size, 
+                               get<symbol_tag_t<X>>(other._arrays)) && ...);
+        }
+    }
+};
+
+// TODO: Consider binary search for variant index
 namespace detail {
     template<class R, class... Variants, size_t I, size_t... Is, class F, class... Ts>
     constexpr R visit_clazz_variant(std::index_sequence<I, Is...>, const unsigned char index, void* const ptr, F&& f, Ts&&... args) {
@@ -2643,12 +3562,62 @@ namespace detail {
         std::terminate();
     }
 }
+}
+
+namespace std {
+    template<size_t I, CLAZZ_NS::Clazz C>
+    constexpr inline decltype(auto) get(C&& c) {
+        return CLAZZ_NS::get<I>(std::forward<C>(c));
+    }
+
+    template<CLAZZ_NS::Clazz C>
+    struct tuple_size<C> : std::integral_constant<size_t, CLAZZ_NS::clazz_info<C>::size> {};
+
+    template<size_t N, CLAZZ_NS::Clazz C>
+    struct tuple_element<N, C> {
+        using type = typename CLAZZ_NS::clazz_info<C>::template index_element_t<N>;
+    };
+
+    template<CLAZZ_NS::Clazz C>
+    struct hash<C> {
+        size_t operator()(const C& c) const {
+            return CLAZZ_NS::hash(c);
+        }
+    };
+
+    template<CLAZZ_NS::Clazz L, CLAZZ_NS::Clazz R>
+    requires CLAZZ_NS::ClazzOf<typename CLAZZ_NS::clazz_info<L>::variables_info_t::clazz_t, 
+                               typename CLAZZ_NS::clazz_info<R>::variables_info_t::clazz_t>
+    void swap(L& l, R& r) {
+        using namespace CLAZZ_NS;
+        [&]<Variable... V>(clazz_info<clazz<V...>>) {
+            using std::swap;
+            (swap(get<symbol_tag_t<V>>(l), get<symbol_tag_t<V>>(r)), ...);
+        }(typename clazz_info<L>::variables_info_t{});
+        std::cout << "std swapped\n";
+    }
+
+    template<class... X>
+    void iter_swap(CLAZZ_NS::clazz<X...>& l, CLAZZ_NS::clazz<X...>& r) {
+        swap(l, r);
+        std::cout << "std swapped\n";
+    }
+}
+
+// TEST CODE
+using namespace CLAZZ_NS;
 
 DECLARE_STRUPLE_SYMBOL(eat);
 DECLARE_STRUPLE_SYMBOL(cats);
 DECLARE_STRUPLE_SYMBOL(dogs);
 DECLARE_STRUPLE_SYMBOL(cows);
-
+DECLARE_STRUPLE_SYMBOL(print);
+DECLARE_STRUPLE_SYMBOL(swap);
+DECLARE_STRUPLE_SYMBOL(x);
+DECLARE_STRUPLE_SYMBOL(y);
+DECLARE_STRUPLE_SYMBOL(z);
+DECLARE_STRUPLE_SYMBOL(name);
+DECLARE_STRUPLE_SYMBOL(age);
 
 inline clazz<var::_1<int>, var::_2<double>> testf() {
     return {1, 2.0};
@@ -2699,12 +3668,12 @@ using type = meta_pod <
         >
     >
     ,
-    def::operator_points_to<void() const, [](auto& ths) {
+    def::operator_pointer<void() const, [](auto& ths) {
         return &ths;
     }>
 >::clazz_t;
 
-static_assert(std::is_same_v<var::_1<int>, meta_clazz_t<type>::tag_symbol_t<tag::_1>>);
+static_assert(std::is_same_v<var::_1<int>, clazz_info<type>::tag_symbol_t<tag::_1>>);
 
 using type2 = clazz <
     var :: _1 <int>,
@@ -2722,15 +3691,15 @@ auto named_def = overload {
     }
 };
 
-static_assert(meta_clazz_t<type>::has_dec<dec::_1<int>>);
-static_assert(meta_clazz_t<type>::has_dec<dec::_2<double>>);
-static_assert(meta_clazz_t<type>::has_dec<dec::_3<int>>);
-static_assert(meta_clazz_t<type>::has_dec<dec::_4<int() const>>);
-static_assert(meta_clazz_t<type>::has_dec<dec::_5<int(int) const>>);
-static_assert(meta_clazz_t<type>::has_dec<dec::_6<int(int) const>>);
-static_assert(meta_clazz_t<type>::has_dec<dec::_7<int()>>);
-static_assert(meta_clazz_t<type>::has_dec<dec::_8<int(int) const>>);
-static_assert(meta_clazz_t<type>::has_dec<dec::_9<int() const>>);
+static_assert(clazz_info<type>::has_dec<dec::_1<int>>);
+static_assert(clazz_info<type>::has_dec<dec::_2<double>>);
+static_assert(clazz_info<type>::has_dec<dec::_3<int>>);
+static_assert(clazz_info<type>::has_dec<dec::_4<int() const>>);
+static_assert(clazz_info<type>::has_dec<dec::_5<int(int) const>>);
+static_assert(clazz_info<type>::has_dec<dec::_6<int(int) const>>);
+static_assert(clazz_info<type>::has_dec<dec::_7<int()>>);
+static_assert(clazz_info<type>::has_dec<dec::_8<int(int) const>>);
+static_assert(clazz_info<type>::has_dec<dec::_9<int() const>>);
 
 inline type testF(const clazz<var::_1<int, 1>, var::_2<double>>& clz) {
     //return {set::_1 = 1, set::_2 = 20.0};
@@ -2771,7 +3740,7 @@ using Animals = clazz <
     var :: cats <std::array<Cat, 1>>,
     var :: dogs <std::array<Dog, 1>>,
     var :: cows <std::array<Cow, 1>>
-    //, def :: operator_points_to<void, [](auto& self) { return &self; }> 
+    //, def :: operator_pointer<void, [](auto& self) { return &self; }> 
 >;
 
 template<class T, Declaration... Ds>
@@ -2854,15 +3823,39 @@ using var3 = clazz <
     }>
 >;
 
-DECLARE_STRUPLE_SYMBOL(print);
-DECLARE_STRUPLE_SYMBOL(x);
-DECLARE_STRUPLE_SYMBOL(y);
-DECLARE_STRUPLE_SYMBOL(z);
-DECLARE_STRUPLE_SYMBOL(name);
-DECLARE_STRUPLE_SYMBOL(age);
-
-
 using n_trait = trait<dec::_10<int()>>;
+
+struct tracker { 
+    int i; 
+    bool operator<(const tracker& t) {
+        return i < t.i;
+    }
+    tracker() : i(1) {
+        std::cout << "tracker default ctor\n";
+    }
+    ~tracker() {
+        std::cout << "tracker dtor\n";
+    }
+    tracker(int n) : i(n) {
+        std::cout << "tracker int ctor\n";
+    }
+    tracker(const tracker& t) : i(t.i) { 
+        std::cout << "tracker copied\n";
+    } 
+    tracker(tracker&& t) : i(t.i) { 
+        std::cout << "tracker move ctr\n";
+    } 
+    tracker& operator=(const tracker& t) {
+        i = t.i;
+        std::cout << "tracker copy assign\n";
+        return *this;
+    }
+    tracker& operator=(tracker&& t) {
+        i = t.i;
+        std::cout << "tracker move assign\n";
+        return *this;
+    }
+};
 
 int main(int argc, char** argv) {
     if (!trivial_tuple_test()) {
@@ -2870,21 +3863,82 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    auto c1 = clazz{set::_1 = 1, set::_2 = 2};
+    auto c2 = clazz{set::_2 = 2, set::_1 = 1};
+    using std::swap;
+    swap(c1, c2);
+
+    int one = 1;
+
+    auto fwd_c = map(clazz{set::_1 = 1}, [](auto&& var) -> auto&& { return std::move(var); });
+    static_assert(meta_clazz_t<decltype(fwd_c)>::has_dec<dec::_1<int&&>>);
+
+    using view_test = clazz<var::_1<int>>;
+    view_test v1 = {1};
+    view_t<view_test> v2 = v1;
+    view_t<view_test> v3 = v2;
+    view_t<view_test> v4 = std::move(v2);
+
+    // std::swap(v2, v3);
+
+    int n;
+    std::string s;
+    auto t1 = clazz<var::_1<int&>, var::_2<std::string&>>(n, s);
+    // std::swap(t1, t1);
+
+    int soa_count = 0;
+    soa<clazz<var::_1<int>, var::_2<std::string, []{return "yo";}>, var::_3<tracker, []{return tracker(1);}>>> soa;
+    std::cout << "push (3,no)...\n";
+    soa.push_back({3, "no"});
+    std::cout << "push (2,po)...\n";
+    soa.push_back({2, "po"});
+    std::cout << "shrink...\n";
+    soa.shrink_to_fit();
+    std::cout << "push (6,yo)...\n";
+    soa.push_back(6);
+    std::cout << "push (6,ho)...\n";
+    soa.push_back(6, "ho");
+    std::cout << "emplace (4, ppp) ...\n";
+    soa.emplace_back(set::_1 = 4, set::_2(3,'p'), set::_3(6));
+    std::cout << "emplace (4, ppp) ...\n";
+    soa.emplace_back(set::_1 = 4, set::_2(3,'p'), set::_3(5));
+    std::cout << "sorting...\n";
+    // std::sort(soa.begin(), soa.end());
+    soa.sort([](const auto& l, const auto& r) {
+        return clazz_comparator<tag::_3, tag::_1, tag::_2>::strong_less_than(l, r);   
+    });
+    for(auto& el : soa) {
+        soa_count += el._1 + el._2.length();
+        std::cout << el._1 << ',' << el._2 << ',' << el._3.i << '\n';
+    }
+
+    auto data = soa.data();
+    for (int i = 0; i < data._.size; ++i) {
+        std::cout << "first " << data._1[i] << '\n';
+    }
+
+    return soa_count;
+
     // return hash(clazz{set::_1 = 1});
 
-    auto tup = std::tuple{1, 2};
-    auto nup = nuple(std::tuple{1,2});
-    using nupc_t = clazz<var::_2<int>, var::_3<int>>;
-    auto nupc = nupc_t(tup);
-    view_t<nupc_t> nupcv = nupc;
-    return nupcv._2 + nupcv._3;
-    auto& nupc2 = as_named_tuple<nuple>(tup);
-    return nupc2._1 + nupc2._2;
+    // auto tup = std::tuple{1, 2};
+    // auto nup = nuple(std::tuple{1,2});
+    // using nupc_t = clazz<var::_2<int>, var::_3<int>>;
+    // auto nupc = nupc_t(tup);
+    // view_t<nupc_t> nupcv = nupc;
+    // return nupcv._2 + nupcv._3;
+    // auto& nupc2 = as_named_tuple<nuple>(tup);
+    // return nupc2._1 + nupc2._2;
 
-    auto c = clazz<var::_1<int, 1>, val::_2<int, 20>, val::_3<int, 300>>{};
-    auto t = tie<tag::_1, tag::_2>(c);
-    auto& [first, second] = t;
-    return first + second;
+    // auto c = clazz<var::_1<int, 1>, val::_2<int, 20>, val::_3<int, 300>>{};
+    // auto t = tie<tag::_1, tag::_2>(c);
+    // int x,y;
+    // auto tie1 = std::tie(y,x);
+    // auto tie2 = std::tie(x,y);
+    // std::swap(tie1, tie2);
+    // auto&& [first, second] = std::tie(x,y);
+    // static_assert(std::is_lvalue_reference_v<decltype(first)>);
+    // return first + second;
     
     // auto pv = vvector<n_trait
     // , var1
@@ -2914,15 +3968,15 @@ int main(int argc, char** argv) {
     // auto c1 = variant<var1>{argv[0][0], v1};
     // return reinterpret_cast<var_clazz<var1, var2, var3>&>(c1)._10();
     
-    constexpr bool compare = clazz{set::_1 = 0.9, set::_2 = 2, set::_4 = 0} < clazz<var::_2<int, 2>, val::_1<int, 1>>{};
-    return compare;
+    // constexpr bool compare = clazz{set::_1 = 0.9, set::_2 = 2, set::_4 = 0} < clazz<var::_2<int, 2>, val::_1<int, 1>>{};
+    // return compare;
 
-    auto testCompInst = testComp{set::_1 ="", set::_2(2, 'h')};
-    return testCompInst._2.length();
-    return testCompInst->call(ttc);
-    struct{const char* _1 = ""; std::string _2 = std::string(2, 'h');} in;
-    return ttc(in);
-    return ttc(ttc_in{._1 = "hi", ._2 = "no"});
+    // auto testCompInst = testComp{set::_1 ="", set::_2(2, 'h')};
+    // return testCompInst._2.length();
+    // return testCompInst->call(ttc);
+    // struct{const char* _1 = ""; std::string _2 = std::string(2, 'h');} in;
+    // return ttc(in);
+    // return ttc(ttc_in{._1 = "hi", ._2 = "no"});
 
     struct {
         int _3 = 12;
@@ -2933,11 +3987,11 @@ int main(int argc, char** argv) {
     auto inst = make_clazz<tag::_1, tag::_2, tag::_3>(hi);
     auto inst2 = clazz<var::_3<int>, var::_1<int>, var::_4<int, 3>>(hi);
     auto inst3 = meta_clazz<var::_3<int>, var::_1<int>, var::_4<int, 3>>::import_with_defaults(hi);
-    return inst3._3 + inst3._1 + inst3._4;
+    // return inst3._3 + inst3._1 + inst3._4;
 
-    return retT(clazz<var::_1<const char*>>{"sashi"});
-    return retT(clazz{set::_1 = "sashi"});
-    return retT({set::_1 = "sashi"});
+    // return retT(clazz<var::_1<const char*>>{"sashi"});
+    // return retT(clazz{set::_1 = "sashi"});
+    // return retT({set::_1 = "sashi"});
 
     Animals a {
         std::array<Cat, 1>{},
@@ -2953,7 +4007,7 @@ int main(int argc, char** argv) {
     //return count;
     auto F = testF({set::_2 = 20.0});
     F._1 = 1;
-    F._2 = 10;
+    F._2 = 20;
     int i = 0;
     F->for_each_as_var(try_first {
         [&](var::_1<int>& in) {
