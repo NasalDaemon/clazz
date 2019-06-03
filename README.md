@@ -194,6 +194,10 @@ for (const auto& element : vvec)
 // John Smith aged 21
 ```
 ### 7. <a name="greatest-hits-soa"></a>First clazz SoA (column-wise vector that is as easy to use as a vector of structs)
+* Create a "vector of clazzes", with the memory arranged column-wise contiguously in memory. 
+* The beginning of each field array is aligned to a cache-line by default. 
+* Only one memory allocation per resize.
+* Optimised sorting algorithm to avoid cache-thrashing versus the naive implementation.
 ```c++
 using persons = soa <       // Similar memory structure to: clazz <
   var name <std::string>,   //   var name <std::vector<std::string>>,
@@ -224,9 +228,9 @@ for (auto& person : people) {
 }
 
 // Prints:
-Joe Moe is 23 years old
-John Doe is 22 years old
-John Smith is 21 years old
+// Joe Moe is 23 years old
+// John Doe is 22 years old
+// John Smith is 21 years old
 
 // Sort in ascending order of age
 people.sort([](const auto& left, const auto& right) {
@@ -238,7 +242,7 @@ for (auto& person: people) {
 }
 
 // Prints:
-John Smith is 21 years old
-John Doe is 22 years old
-Joe Moe is 23 years old
+// John Smith is 21 years old
+// John Doe is 22 years old
+// Joe Moe is 23 years old
 ```
