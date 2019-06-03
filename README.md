@@ -24,6 +24,7 @@ The future is here. Get out of economy and into first clazz. You still have to d
 4. [Named tuples, interop with existing std::tuple, structured bindings](#greatest-hits-nuple)
 5. [Interop with existing vanilla classes, structural extraction of fields by name](#greatest-hits-interop)
 6. [Runtime polymorphism without vtables or std::visit (runtime polymorphism which can be inlined)](#greatest-hits-rt-poly)
+7. [First clazz SoA (column-wise vector that is as easy to use as a vector of structs)](#greatest-hits-soa)
 
 ### 1. <a name="greatest-hits-inline-definitions"></a>Inline class definitions
 ```c++
@@ -191,4 +192,52 @@ for (const auto& element : vvec)
 // (0,0,0)
 // (3,2,1)
 // John Smith aged 21
+```
+### 7. <a name="greatest-hits-soa"></a>First clazz SoA (column-wise vector that is as easy to use as a vector of structs)
+```
+using persons = soa <       // Similar memory structure to: clazz <
+  var name <std::string>,   //   var name <std::vector<std::string>>,
+  var age <int>             //   var age <std::vector<int>>
+>;                          // >;
+
+auto people = persons(); // Default reserved memory is for 12 elements
+
+// Creates one block of memory in one memory allocation for use by all fields,
+// with elements to be arranged in column-wise order in the memory block.
+people.reserve(20); 
+
+// Add some elements to the SoA
+people.push_back("John Smith", 21); // Construct and move in place
+people.emplace_back("John Doe", 22); // Construct in place
+people.emplace_back(set age = 23, set name = "Joe Moe"); // Construct with designated initialiser in place
+
+// Sort in ascending order of name then age.
+// Sort algorithm is cache optimised for SoA by first finding a sorting order
+// before moving elements into their final position in memory, field by field.
+// In this particular case, the age column is only accessed when ages for
+// the respective elements are moved into their final position.
+people.sort();
+
+for (auto& person : people) {
+  std::cout << person.name << " is " << person.age << " years old\n";
+}
+
+// Prints:
+Joe Moe is 23 years old
+John Doe is 22 years old
+John Smith is 21 years old
+
+// Sort in ascending order of age
+people.sort([](const auto& left, const auto& right) {
+  return left.age < right.age;
+});
+
+for (auto& person: people) {
+  std::cout << person.name << " is " << person.age << " years old\n";
+}
+
+// Prints:
+John Smith is 21 years old
+John Doe is 22 years old
+Joe Moe is 23 years old
 ```
