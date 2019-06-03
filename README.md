@@ -194,7 +194,7 @@ for (const auto& element : vvec)
 // John Smith aged 21
 ```
 ### 7. <a name="greatest-hits-soa"></a>First clazz SoA (column-wise vector that is as easy to use as a vector of structs)
-```
+```c++
 using persons = soa <       // Similar memory structure to: clazz <
   var name <std::string>,   //   var name <std::vector<std::string>>,
   var age <int>             //   var age <std::vector<int>>
