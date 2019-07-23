@@ -70,8 +70,9 @@ using ABC = clazz <
 3. [Unordered designated initialisation](#greatest-hits-desi-ini)
 4. [Interop with existing vanilla classes, structural extraction of fields by name](#greatest-hits-interop)
 5. [clz::nuple<>: Named tuples, interop with existing std::tuple, structured bindings](#greatest-hits-nuple)
-6. [clz::hvector<>: Heterogeneous vector of clazzes implementing a trait](#greatest-hits-hvector)
-7. [clz::cvector<>: First clazz SoA - column-wise vector that is as easy to use as a vector of structs](#greatest-hits-cvector)
+6. [clz::sort_asc<>: Sort data members by size to minimise padding](#greatest-hits-sort-mem)
+7. [clz::hvector<>: Heterogeneous vector of clazzes implementing a trait](#greatest-hits-hvector)
+8. [clz::cvector<>: First clazz SoA - column-wise vector that is as easy to use as a vector of structs](#greatest-hits-cvector)
 
 ### 1. <a name="greatest-hits-inline-definitions"></a>clz::clazz<>: Inline class definitions
 Use a clazz directly, without having defined a name for it.
@@ -217,12 +218,55 @@ assert(a1 == n1._1 && b1 == n1._2 && c1 == n1._3);
 auto [a2, b2, c2] = n1;
 assert(a2 == n1._1 && b2 == n1._2 && c2 == n1._3);
 ```
-### 6. <a name="greatest-hits-hvector"></a>clz::hvector<>: Heterogeneous vector of clazzes implementing a trait
+### 6. <a name="greatest-hits-sort-mem"></a>clz::sort_asc<>: Sort data members by size to minimise padding
+Data members in normal structs are placed in memory in declaration order. This can result in wasted space due to padding between data members. It is possible to manually reorder the declaration of these members in structs, but it is brittle to change, and makes the struct declaration less readable.
+With clazzes, you can declare the members in logical order, but have them laid out in memory in ascending or descending order of size, resulting in minimal padding.
+```c++
+using bad_padding = clazz <
+    var s1 <std::string>, // 32
+    var c1 <char>,        // 1
+    // clz::padding<7>,   // 7 (wasted)
+    var s2 <std::string>, // 32
+    var c2 <char>,        // 1
+    // clz::padding<7>,   // 7 (wasted)
+    var s3 <std::string>, // 32
+    var c3 <char>,        // 1
+    // clz::padding<7>,   // 7 (wasted)
+    var s4 <std::string>, // 32
+    var c4 <char>,        // 1
+    // clz::padding<7>    // 7 (wasted)
+>;
+// 4*7 = 28 bytes wasted due to padding
+static_assert(sizeof(bad_padding) == 160);
+
+// Manually order fields to minimise space lost due to padding
+using good_padding = clazz <
+    var c1 <char>,        // 1
+    var c2 <char>,        // 1
+    var c3 <char>,        // 1
+    var c4 <char>,        // 1
+    // .. no padding needed here ...
+    var s1 <std::string>, // 32
+    var s2 <std::string>, // 32
+    var s3 <std::string>, // 32
+    var s4 <std::string>  // 32
+>;
+// No bytes wasted on padding
+static_assert(sizeof(good_padding) == 136);
+
+// Using sort_asc on bad_padding results in good_padding
+static_assert(std::is_same_v<sort_asc<bad_padding>, good_padding>>);
+
+// Sorting in descending order also results in efficient packing
+static_assert(sizeof(sort_asc<bad_padding>) == sizeof(sort_desc<bad_padding>));
+```
+### 7. <a name="greatest-hits-hvector"></a>clz::hvector<>: Heterogeneous vector of clazzes implementing a trait
 Runtime polymorphism without vtables or std::visit (runtime polymorphism which can be inlined).
 ```c++
 using printable = trait<dec print<void() const>>;
 
-using position = clazz <
+// clazz with data members sorted in descending order of size (to help packing in hvector)
+using position = clazz_desc <
     var x <int>, 
     var y <int>, 
     var z <int>, 
@@ -231,7 +275,8 @@ using position = clazz <
     }>
 >;
 
-using person = clazz <
+// clazz with data members sorted in descending order of size (to help packing in hvector)
+using person = clazz_desc <
     var name  <std::string>,
     var age   <int>,
     def print <void() const, [](auto& self) {
@@ -248,8 +293,8 @@ hvec.emplace_back<person>("John Smith", 21); // Add {name: "John Smith", age: 21
 
 // vvector uses minimal space required by packing the clazzes together
 static_assert(sizeof(position) == 12 && sizeof(person) == 40);
-assert(hvec.data_size() == 2 * sizeof(position) + sizeof(person) + 3);
-// Uses 67 bytes instead of 123, which would have been the case with a plain vector of variants
+assert(hvec.data_size() == 2 * 16 + 40); // 2 * {char,int,int,int} + {char,int,std::string}
+// Uses 72 bytes vs 144, which is 3 * sizeof(std::variant<person,position>)
 
 for (const auto& element : hvec)
     element.print(); // Call print(), which is declared in the printable trait, directly on element without ugly visitor syntax
@@ -259,7 +304,7 @@ for (const auto& element : hvec)
 // (3,2,1)
 // John Smith aged 21
 ```
-### 7. <a name="greatest-hits-cvector"></a>clz::cvector<>: First clazz SoA (column-wise vector that is as easy to use as a vector of structs)
+### 8. <a name="greatest-hits-cvector"></a>clz::cvector<>: First clazz SoA (column-wise vector that is as easy to use as a vector of structs)
 Create a "vector of clazzes", with the memory arranged column-wise contiguously in memory. 
 * The beginning of each field array is aligned to a cache-line by default (64 bytes)
 * Only one memory allocation per resize.
