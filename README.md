@@ -245,13 +245,13 @@ using good_padding = clazz <
     var c2 <char>,        // 1
     var c3 <char>,        // 1
     var c4 <char>,        // 1
-    // .. no padding needed here ...
+    // clz::padding<4>,   // 4 (wasted)
     var s1 <std::string>, // 32
     var s2 <std::string>, // 32
     var s3 <std::string>, // 32
     var s4 <std::string>  // 32
 >;
-// No bytes wasted on padding
+// Only 4 bytes wasted on padding
 static_assert(sizeof(good_padding) == 136);
 
 // Using sort_asc on bad_padding results in good_padding
