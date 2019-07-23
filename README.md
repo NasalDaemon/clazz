@@ -233,7 +233,7 @@ using bad_padding = clazz <
     var c3 <char>,        // 1
     // clz::padding<7>,   // 7 (wasted)
     var s4 <std::string>, // 32
-    var c4 <char>,        // 1
+    var c4 <char>         // 1
     // clz::padding<7>    // 7 (wasted)
 >;
 // 4*7 = 28 bytes wasted due to padding
