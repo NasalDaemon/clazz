@@ -219,10 +219,18 @@ auto [a2, b2, c2] = n1;
 assert(a2 == n1._1 && b2 == n1._2 && c2 == n1._3);
 ```
 ### 6. <a name="greatest-hits-sort-mem"></a>clz::sort_asc<>: Sort data members by size to minimise padding
-Data members in normal structs are placed in memory in declaration order. This can result in wasted space due to padding between data members. It is possible to manually reorder the declaration of these members in structs, but it is brittle to change, and makes the struct declaration less readable.
+Data members in normal structs are placed in memory in declaration order. This can result in wasted space due to padding between data members. It is possible to manually reorder the declaration of these members in structs, but it is brittle to future code changes, which could silently reduce space efficiency, and makes the struct declaration less readable.
+
 With clazzes, you can declare the members in logical order, but have them laid out in memory in ascending or descending order of size, resulting in minimal padding.
+
+To order the data members in memory in:
+* order of increasing size stable with declaration order, use ```clazz_asc``` or ```sort_asc``` (which minimises padding)
+* order of decreasing size stable with declaration order, use ```clazz_desc``` or ```sort_desc``` (which minimises padding)
+* order of declaration, use ```clazz_decl``` (like with a vanilla struct)
+* std::tuple memory layout order, use ```clazz``` (for easy and unsurprising std::tuple interop)
 ```c++
-using bad_padding = clazz <
+// Manually order fields to maximise space lost due to padding
+using bad_padding = clazz_decl <
     var s1 <std::string>, // 32
     var c1 <char>,        // 1
     // clz::padding<7>,   // 7 (wasted)
@@ -240,7 +248,7 @@ using bad_padding = clazz <
 static_assert(sizeof(bad_padding) == 160);
 
 // Manually order fields to minimise space lost due to padding
-using good_padding = clazz <
+using good_padding = clazz_decl <
     var c1 <char>,        // 1
     var c2 <char>,        // 1
     var c3 <char>,        // 1
@@ -265,8 +273,7 @@ Runtime polymorphism without vtables or std::visit (runtime polymorphism which c
 ```c++
 using printable = trait<dec print<void() const>>;
 
-// clazz with data members sorted in descending order of size (to help packing in hvector)
-using position = clazz_desc <
+using position = clazz <
     var x <int>, 
     var y <int>, 
     var z <int>, 
@@ -275,8 +282,8 @@ using position = clazz_desc <
     }>
 >;
 
-// clazz with data members sorted in descending order of size (to help packing in hvector)
-using person = clazz_desc <
+// clazz with data members sorted in ascending order of size to help packing (char) variant index in hvector
+using person = clazz_asc <
     var name  <std::string>,
     var age   <int>,
     def print <void() const, [](auto& self) {
@@ -289,9 +296,9 @@ auto hvec = clz::hvector<printable, position, person>();
 //                       ^ trait    ^ option1 ^ option2 ...
 hvec.emplace_back<position>(0, 0, 0); // Add {x: 0, y: 0, z: 0}
 hvec.emplace_back<position>(3, 2, 1); // Add {x: 3, y: 2, z: 1}
-hvec.emplace_back<person>("John Smith", 21); // Add {name: "John Smith", age: 21}
+hvec.emplace_back<person>(arg name = "John Smith", arg age = 21); // Add {name: "John Smith", age: 21}
 
-// vvector uses minimal space required by packing the clazzes together
+// hvector uses minimal space required by packing the clazzes together
 static_assert(sizeof(position) == 12 && sizeof(person) == 40);
 assert(hvec.data_size() == 2 * 16 + 40); // 2 * {char,int,int,int} + {char,int,std::string}
 // Uses 72 bytes vs 144, which is 3 * sizeof(std::variant<person,position>)
