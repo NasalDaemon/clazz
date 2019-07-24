@@ -3521,18 +3521,35 @@ struct restrict_aligned<T&, A> {
 template<class T, size_t A>
 using restrict_aligned_t = typename restrict_aligned<T, A>::type;
 
-// Default alignment to cache-line
-template<Pod, size_t Align = 64>
+template<Pod P, size_t Align, SubClazzOf<P> C>
 requires std::ispow2(Align)
-struct cvector;
+struct cvector_impl;
 
-template<Variable... X, size_t Align>
-struct cvector<clazz<X...>, Align> {
-    template<class, size_t>
-    friend struct cvector;
+// Default alignment to cache-line
+template<Clazz C, size_t Align = 64>
+requires std::ispow2(Align)
+using cvector = cvector_impl<typename clazz_info<C>::pod_info_t::clazz_t, Align, C>;
 
-    template<template<class...> class Wrapper, Variable S>
-    using mapped_symbol_t = typename symbol_tag_info<S>::template var_t<Wrapper<symbol_value_t<S>>>;
+template<template<class...> class Wrapper, Symbol S>
+struct mapped_symbol;
+
+template<template<class...> class Wrapper, Variable S>
+struct mapped_symbol<Wrapper, S> {
+    using type = typename symbol_tag_info<S>::template var_t<Wrapper<symbol_value_t<S>>>;
+};
+
+template<template<class...> class Wrapper, EmptySymbol S>
+struct mapped_symbol<Wrapper, S> {
+    using type = S;
+};
+
+template<template<class...> class Wrapper, Variable S>
+using mapped_symbol_t = typename mapped_symbol<Wrapper, S>::type;
+
+template<Variable... X, size_t Align, Symbol... S>
+struct cvector_impl<clazz<X...>, Align, clazz<S...>> {
+    template<class, size_t, class>
+    friend struct cvector_impl;
 
     // template<class... T>
     // using container_wrapper = std::vector<T...>;
@@ -3542,7 +3559,7 @@ struct cvector<clazz<X...>, Align> {
     // arrays_t arrays;
 
     using size_type = size_t;
-    using clazz_t = clazz<X...>;
+    using clazz_t = clazz<S...>;
 
     using value_type = view_t<clazz_t>;
     using reference = view_t<clazz_t>;
@@ -3582,7 +3599,7 @@ private:
     static constexpr size_type default_capacity = 12;
     static constexpr size_type min_size = 4;
 
-    cvector(const offsets_t& offsets, size_type capacity, size_type size)
+    cvector_impl(const offsets_t& offsets, size_type capacity, size_type size)
         : _capacity{capacity}
         , _size{size}
         , _buffer{_create_buffer(offsets, capacity)}
@@ -3590,10 +3607,10 @@ private:
     {}
 
 public:
-    cvector(size_type capacity = default_capacity) : cvector{_create_offsets(capacity), capacity, 0} {}
+    cvector_impl(size_type capacity = default_capacity) : cvector_impl{_create_offsets(capacity), capacity, 0} {}
 
-    cvector(const cvector& other) 
-        : cvector(_create_offsets(2 * other._size), 2 * other._size, other._size)
+    cvector_impl(const cvector_impl& other) 
+        : cvector_impl(_create_offsets(2 * other._size), 2 * other._size, other._size)
     {
         _for_each(other._buffer.get(), _capacity, [this]<class T>(T* __restrict our_buffer, T* __restrict other_buffer) {
             our_buffer = _assume_aligned(our_buffer);
@@ -3605,11 +3622,11 @@ public:
         });
     }
 
-    cvector(cvector&& other) : cvector() {
+    cvector_impl(cvector_impl&& other) : cvector_impl() {
         swap(other);
     }
 
-    void swap(cvector& other) {
+    void swap(cvector_impl& other) {
         using std::swap;
         swap(_capacity, other._capacity);
         swap(_size, other._size);
@@ -3617,7 +3634,7 @@ public:
         swap(_arrays, other._arrays);
     }
 
-    friend void swap(cvector& l, cvector& r) {
+    friend void swap(cvector_impl& l, cvector_impl& r) {
         l.swap(r);
     }
 
@@ -3847,19 +3864,19 @@ public:
     }
 
     // Append elements of cvector column-wise
-    template<class... V, size_t A>
+    template<class... V, size_t A, class C>
     requires (clazz_info<clazz<V...>>::template shares_name<X> && ...)
           && (std::is_constructible_v<
                 symbol_value_t<X>, 
                 symbol_value_t<typename clazz_info<clazz<V...>>::template tag_symbol_t<symbol_tag_t<X>>>
               > && ...)
-    void append(const cvector<clazz<V...>, A>& other) {
+    void append(const cvector_impl<clazz<V...>, A, C>& other) {
         _grow_on_append(other._size);
 
-        _for_each_tagged([this, &other]<class T, class S>(T* array, type_list<S>) {
+        _for_each_tagged([this, &other]<class T, class Sym>(T* array, type_list<Sym>) {
             array = _assume_aligned(array);
             for (size_type i = 0; i < other._size; ++i) {
-                new (array + _size + i) T(get<symbol_tag_t<S>>(other._arrays)[i]);
+                new (array + _size + i) T(get<symbol_tag_t<Sym>>(other._arrays)[i]);
             }
         });
         _size += other._size;
@@ -3876,10 +3893,10 @@ public:
         auto size = size = other.size();
         _grow_on_append(size);
 
-        _for_each_tagged([this, size, &other]<class T, class S>(T* array, type_list<S>) {
+        _for_each_tagged([this, size, &other]<class T, class Sym>(T* array, type_list<Sym>) {
             array = _assume_aligned(array);
             for (size_type i = 0; i < size; ++i) {
-                new (array + _size + i) T(get<symbol_tag_t<S>>(other[i]));
+                new (array + _size + i) T(get<symbol_tag_t<Sym>>(other[i]));
             }
         });
         _size += size;
@@ -3915,10 +3932,10 @@ public:
     void append(size_type size, const C& arrays) {
         _grow_on_append(size);
 
-        _for_each_tagged([this, size, &arrays]<class T, class S>(T* array, type_list<S>) {
+        _for_each_tagged([this, size, &arrays]<class T, class Sym>(T* array, type_list<Sym>) {
             array = _assume_aligned(array);
             for (size_type i = 0; i < size; ++i) {
-                new (array + _size + i) T(get<symbol_tag_t<S>>(arrays)[i]);
+                new (array + _size + i) T(get<symbol_tag_t<Sym>>(arrays)[i]);
             }
         });
         _size += size;
@@ -3935,10 +3952,10 @@ public:
     void append(size_type size, const C& generators) {
         _grow_on_append(size);
 
-        _for_each_tagged([this, size, &generators]<class T, class S>(T* array, type_list<S>) {
+        _for_each_tagged([this, size, &generators]<class T, class Sym>(T* array, type_list<Sym>) {
             array = _assume_aligned(array);
             for (size_type i = 0; i < size; ++i) {
-                new (array + _size + i) T(std::invoke(get<symbol_tag_t<S>>(generators), i));
+                new (array + _size + i) T(std::invoke(get<symbol_tag_t<Sym>>(generators), i));
             }
         });
         _size += size;
@@ -4027,7 +4044,7 @@ public:
     void clear() {
         resize(0);
     }
-    ~cvector() {
+    ~cvector_impl() {
         clear();
     }
 
@@ -4044,7 +4061,7 @@ private:
                                                    std::add_pointer_t<T> __restrict>;
 
         using pointers = clazz <
-            typename cvector::template mapped_symbol_t<pointer_wrapper, X>...
+            mapped_symbol_t<pointer_wrapper, X>...
         >;
 
         template<class T>
@@ -4070,7 +4087,7 @@ private:
                     std::cout << "assign copied\n";
                 }>
             >,
-            typename cvector::template mapped_symbol_t<reference_wrapper, X>...
+            mapped_symbol_t<reference_wrapper, S>...
         >;
 
         pointers ptrs;
@@ -4305,9 +4322,9 @@ public:
         });
     }
 
-    template<class... S>
-    bool operator==(const cvector<clazz<S...>>& other) const {
-        if constexpr (sizeof...(S) != sizeof...(X) || (!clazz_info<clazz<S...>>::template shares_name<X> || ...)) {
+    template<class P, size_t A, class C>
+    bool operator==(const cvector_impl<P, A, C>& other) const {
+        if constexpr (clazz_info<P>::size != sizeof...(X) || (!clazz_info<P>::template shares_name<X> || ...)) {
             return false;
         } else {
             return _size == other._size 
@@ -4320,12 +4337,12 @@ public:
     // TODO: Add back when GCC supports three way comparison
     // Columnar strong less than. For row-wise comparison, use strong_less_than_rwise()
 //     template<class... S>
-//     bool operator<(const cvector<clazz<S...>>& other) const {
+//     bool operator<(const cvector_impl<clazz<S...>>& other) const {
 //         return strong_less_than_cwise(other);
 //     }
 
 //     template<class... S>
-//     bool strong_less_than_rwise(const cvector<clazz<S...>>& other) const {
+//     bool strong_less_than_rwise(const cvector_impl<clazz<S...>>& other) const {
 //         auto comp = std::lexicographical_compare_3way(
 //             get<symbol_tag_t<X>>(_arrays), 
 //             get<symbol_tag_t<X>>(_arrays) + _size,
@@ -4336,7 +4353,7 @@ public:
 //     }
 
 //     template<class... S>
-//     bool strong_less_than_cwise(const cvector<clazz<S...>>& other) const {
+//     bool strong_less_than_cwise(const cvector_impl<clazz<S...>>& other) const {
 //         using L = clazz_t;
 //         using R = clazz<S...>;
 
@@ -4731,7 +4748,7 @@ int foo(int argc, char** argv) {
         return 0;
     }
 
-    std::cout << type_name_v<sort_asc<sort_asc<clazz_asc <
+    std::cout << type_name_v<clazz_asc <
         var _1<int>,
         var _2<char>,
         var _3<int>,
@@ -4744,7 +4761,7 @@ int foo(int argc, char** argv) {
         var _10<int>,
         var _11<int>,
         var _12<int>
-    >>>> << '\n';
+    >> << '\n';
 
     cus_ass ca1;
     ca1 = cus_ass{};
@@ -4778,113 +4795,121 @@ int foo(int argc, char** argv) {
     int n;
     std::string s;
     auto t1 = clazz<var _1<int&>, var _2<std::string&>>(n, s);
-    // std::swap(t1, t1);
+    std::swap(t1, t1);
 
-    // int soa_count = 0;
-    // cvector<clazz<var _1<int>, var _2<std::string, []{return "yo";}>, var _3<tracker, []{return tracker(1);}>>> soa;
+    int soa_count = 0;
+    using soa_el = clazz<
+        var _1<int>, 
+        var _2<std::string, []{return "yo";}>, 
+        var _3<tracker, []{return tracker(1);}>,
+        def print<void() const, [](auto& self) {
+            std::cout << "{" << self._1 << "," << self._2 << "," << self._3.i << "}\n";
+        }>
+    >;
+    cvector<soa_el> soa;
 
-    // std::cout << type_name_v<decltype(soa.data())>;
+    std::cout << type_name_v<decltype(soa.data())>;
 
-    // std::cout << "push (3,no)...\n";
-    // soa.push_back({3, "no"});
-    // std::cout << "push (2,po)...\n";
-    // soa.push_back({2, "po"});
-    // std::cout << "iter_swap...\n";
-    // auto b1 = soa.begin();
-    // std::iter_swap(b1, b1);
-    // std::cout << "iter deref assign...\n";
-    // *b1 = *b1;
-    // std::cout << "shrink...\n";
-    // soa.shrink_to_fit();
-    // std::cout << "push (6,yo)...\n";
-    // soa.push_back(6);
-    // std::cout << "push (6,ho)...\n";
-    // soa.push_back(6, "ho");
-    // std::cout << "emplace (4, ppp) ...\n";
-    // soa.emplace_back(arg _1 = 4, arg _2(3,'p'), arg _3 = []{ return 6; });
-    // std::cout << "emplace (4, ppp) ...\n";
-    // soa.emplace_back(arg _1 = 4, arg _2(3,'p'), arg _3(5));
+    std::cout << "push (3,no)...\n";
+    soa.push_back({3, "no"});
+    std::cout << "push (2,po)...\n";
+    soa.push_back({2, "po"});
+    std::cout << "iter_swap...\n";
+    auto b1 = soa.begin();
+    std::iter_swap(b1, b1);
+    std::cout << "iter deref assign...\n";
+    *b1 = *b1;
+    std::cout << "shrink...\n";
+    soa.shrink_to_fit();
+    std::cout << "push (6,yo)...\n";
+    soa.push_back(6);
+    std::cout << "push (6,ho)...\n";
+    soa.push_back(6, "ho");
+    std::cout << "emplace (4, ppp) ...\n";
+    soa.emplace_back(arg _1 = 4, arg _2(3,'p'), arg _3 = []{ return 6; });
+    std::cout << "emplace (4, ppp) ...\n";
+    soa.emplace_back(arg _1 = 4, arg _2(3,'p'), arg _3(5));
 
-    // std::cout << "assigning lots ...\n";
-    // soa.append(20, clazz {
-    //     arg _1 = [](size_t i) {
-    //         return 20 - i;
-    //     }, 
-    //     arg _2 = [](size_t i) {
-    //         return std::to_string(20 - i);
-    //     },
-    //     arg _3 = [](size_t i) {
-    //         return tracker(20 - i);
-    //     }
-    // });
+    std::cout << "assigning lots ...\n";
+    soa.append(20, clazz {
+        arg _1 = [](size_t i) {
+            return 20 - i;
+        }, 
+        arg _2 = [](size_t i) {
+            return std::to_string(20 - i);
+        },
+        arg _3 = [](size_t i) {
+            return tracker(20 - i);
+        }
+    });
 
-    // soa.append(20, clazz {
-    //     arg _1 = [](size_t i) {
-    //         return 20 - i;
-    //     }, 
-    //     arg _2 = [](size_t i) {
-    //         return std::to_string(20 - i);
-    //     },
-    //     arg _3 = [](size_t i) {
-    //         return tracker(20 - i);
-    //     }
-    // });
+    soa.append(20, clazz {
+        arg _1 = [](size_t i) {
+            return 20 - i;
+        }, 
+        arg _2 = [](size_t i) {
+            return std::to_string(20 - i);
+        },
+        arg _3 = [](size_t i) {
+            return tracker(20 - i);
+        }
+    });
 
-    // soa.append(20, clazz {
-    //     arg _1 = [](size_t i) {
-    //         return 20 - i;
-    //     }, 
-    //     arg _2 = [](size_t i) {
-    //         return std::to_string(20 - i);
-    //     },
-    //     arg _3 = [](size_t i) {
-    //         return tracker(20 - i);
-    //     }
-    // });
+    soa.append(20, clazz {
+        arg _1 = [](size_t i) {
+            return 20 - i;
+        }, 
+        arg _2 = [](size_t i) {
+            return std::to_string(20 - i);
+        },
+        arg _3 = [](size_t i) {
+            return tracker(20 - i);
+        }
+    });
 
-    // std::cout << "sorting...\n";
-    // // TODO: Fix naive sort
-    // // std::sort(soa.begin(), soa.end());
-    // // soa.sort();
-    // soa.sort([](const Clazz& l, const Clazz& r) {
-    //     return clazz_comparator<tag _3, tag _1, tag _2>::strong_less_than(l, r);   
-    // });
-    // std::cout << "append1... \n";
-    // soa.append(soa);
-    // std::cout << "append2... \n";
-    // soa.reserve(4*soa.size()); // Ensure soa.data() doesn't become old
-    // soa.append(soa.size(), soa.data());
-    // std::cout << "append3... \n";
-    // soa.append(soa.size(), clazz{arg _1 = [&](size_t i) {
-    //     return soa[i]._1;
-    // }, arg _2 = [&](size_t i) {
-    //     return soa[i]._2;
-    // }, arg _3 = [&](size_t i) {
-    //     return soa[i]._3;
-    // }});
-    // for(auto& el : soa) {
-    //     soa_count += el._1 + el._2.length();
-    //     std::cout << el._1 << ',' << el._2 << ',' << el._3.i << '\n';
-    // }
+    std::cout << "sorting...\n";
+    // TODO: Fix naive sort
+    // std::sort(soa.begin(), soa.end());
+    // soa.sort();
+    soa.sort([](const Clazz& l, const Clazz& r) {
+        return clazz_comparator<tag _3, tag _1, tag _2>::strong_less_than(l, r);   
+    });
+    std::cout << "append1... \n";
+    soa.append(soa);
+    std::cout << "append2... \n";
+    soa.reserve(4*soa.size()); // Ensure soa.data() doesn't become old
+    soa.append(soa.size(), soa.data());
+    std::cout << "append3... \n";
+    soa.append(soa.size(), clazz{arg _1 = [&](size_t i) {
+        return soa[i]._1;
+    }, arg _2 = [&](size_t i) {
+        return soa[i]._2;
+    }, arg _3 = [&](size_t i) {
+        return soa[i]._3;
+    }});
+    for(auto& el : soa) {
+        soa_count += el._1 + el._2.length();
+        el.print();
+    }
 
-    // auto data = soa.sized_data();
-    // for (int i = 0; i < data._.size; ++i) {
-    //     std::cout << "first " << data._1[i] << '\n';
-    // }
+    auto data = soa.sized_data();
+    for (int i = 0; i < data._.size; ++i) {
+        std::cout << "first " << data._1[i] << '\n';
+    }
 
-    // auto agg = xmap(data, 
-    //     args<tag _1, tag _> = [](int* array, auto& s) {
-    //         return std::accumulate(array, array + s.size, 0) / s.size;
-    //     },
-    //     args<tag _2, tag _> = [](std::string* array, auto& s) {
-    //         return std::accumulate(array, array + s.size, 0, [](int i, const std::string& s) {
-    //             return i + s.length();
-    //         }) / s.size;
-    //     });
+    auto agg = xmap(data, 
+        args<tag _1, tag _> = [](int* array, auto& s) {
+            return std::accumulate(array, array + s.size, 0) / s.size;
+        },
+        args<tag _2, tag _> = [](std::string* array, auto& s) {
+            return std::accumulate(array, array + s.size, 0, [](int i, const std::string& s) {
+                return i + s.length();
+            }) / s.size;
+        });
 
-    // std::cout << "avg _1 is " << agg._1 << ", and avg _2.length() is " << agg._2 << ", count is " << soa_count << '\n';
+    std::cout << "avg _1 is " << agg._1 << ", and avg _2.length() is " << agg._2 << ", count is " << soa_count << '\n';
 
-    // return soa_count;
+    return soa_count;
 
     // return hash(clazz{arg _1 = 1});
 
