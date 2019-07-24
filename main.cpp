@@ -16,6 +16,11 @@
 #define EBO_MSVC
 #endif
 
+// All currently supported tuple implementations store elements in memory in reverse order of declaration
+#if 1
+#define CLAZZ_MEM_REV_ORDER
+#endif
+
 #define CLAZZ_NS clz
 
 namespace CLAZZ_NS {
@@ -121,8 +126,7 @@ namespace detail::sort {
             (type_list<type_index<Lt, Li>>, type_list<type_index<Rt, Ri>>) {
                 if (compare(type_list<Lt>{}, type_list<Rt>{})) return true;
                 if (compare(type_list<Rt>{}, type_list<Lt>{})) return false;
-                if (Li < Ri) return true;
-                return false;
+                return Li < Ri;
             }));
     }
 
@@ -621,6 +625,25 @@ struct bind_to<To, From<Xs...>> {
 template<template<class...> class W, class T>
 using bind_to_t = typename bind_to<W, T>::type;
 
+namespace detail {
+    template<class...>
+    struct reverse_types;
+
+    template<template<class...> class W, class T, class... Ts>
+    struct reverse_types<W<T, Ts...>> : reverse_types<W<Ts...>, W<T>> {};
+
+    template<template<class...> class W, class T, class... Ts, class... Us>
+    struct reverse_types<W<T, Ts...>, W<Us...>> : reverse_types<W<Ts...>, W<T, Us...>> {};
+
+    template<template<class...> class W, class... Us>
+    struct reverse_types<W<>, W<Us...>> {
+        using type = W<Us...>;
+    };
+}
+
+template<class Tuple>
+using reverse_types = typename detail::reverse_types<Tuple>::type;
+
 template<Clazz C>
 struct clazz_sort;
 
@@ -630,7 +653,7 @@ private:
     template<class CompSize>
     static constexpr auto sort_by_size(CompSize) {
         return detail::sort::stable_sort(type_list<S...>{},
-            []<class T, class U>(const type_list<T>&l, const type_list<U>&r) {
+            []<class T, class U>(type_list<T>, type_list<U>) {
                 // Put static symbols to the back
                 if constexpr (EmptySymbol<T> != EmptySymbol<U>)
                     return !EmptySymbol<T>;
@@ -643,19 +666,27 @@ private:
                     sizer = 0;
 
                 // If one of the symbols has no size, put it towards the back
-                if (sizel == 0 || sizer == 0) 
+                if ((sizel == 0) != (sizer == 0))
                     return sizel != 0;
 
                 return CompSize{}(sizel, sizer);
             });
     }
 
+#ifdef CLAZZ_MEM_REV_ORDER
+    using less_t    = std::greater<>;
+    using greater_t = std::less<>;
+#else
+    using less_t    = std::less<>;
+    using greater_t = std::greater<>;
+#endif
+
 public:
     template<class = void>
-    using ascending_size_t = bind_to_t<clazz, decltype(sort_by_size(std::less{}))>;
+    using ascending_size_t = bind_to_t<clazz, decltype(sort_by_size(less_t{}))>;
     
     template<class = void>
-    using descending_size_t = bind_to_t<clazz, decltype(sort_by_size(std::greater{}))>;
+    using descending_size_t = bind_to_t<clazz, decltype(sort_by_size(greater_t{}))>;
 };
 
 template<Clazz C>
@@ -664,11 +695,19 @@ using sort_asc = typename clazz_sort<C>::template ascending_size_t<>;
 template<Clazz C>
 using sort_desc = typename clazz_sort<C>::template descending_size_t<>;
 
-template<Symbol... S>
-using clazz_asc = sort_asc<clazz<S...>>;
+#ifdef CLAZZ_MEM_REV_ORDER
+    template<Symbol... S>
+    using clazz_decl = reverse_types<clazz<S...>>;
+#else
+    template<Symbol... S>
+    using clazz_decl = clazz<S...>;
+#endif
 
 template<Symbol... S>
-using clazz_desc = sort_desc<clazz<S...>>;
+using clazz_asc = sort_asc<clazz_decl<S...>>;
+
+template<Symbol... S>
+using clazz_desc = sort_desc<clazz_decl<S...>>;
 
 namespace detail {
     template<class I, Symbol... X>
@@ -702,6 +741,11 @@ struct index_of_type<T, T, Ts...> {
 template<class T, class... Ts>
 struct is_one_of {
     static constexpr bool value = (std::is_same_v<T, Ts> || ...);
+};
+
+template<Clazz T, Clazz... Ts>
+struct is_one_of<T, Ts...> {
+    static constexpr bool value = (ClazzOf<T, Ts> || ...);
 };
 
 template<template<class> class W1, template<class> class W2>
@@ -945,7 +989,13 @@ struct EBO_MSVC struple<Top> {
 };
 
 template<Clazz Top, class X, class... Xs>
-struct struple<Top, X, Xs...> : struple<Top, Xs...>, symbol_element_t<Top, X> {
+struct struple<Top, X, Xs...> 
+#ifdef CLAZZ_MEM_REV_ORDER
+    : struple<Top, Xs...>, symbol_element_t<Top, X> 
+#else 
+    : symbol_element_t<Top, X>, struple<Top, Xs...>
+#endif
+{
 protected:
     using this_t = struple<Top, X, Xs...>;
     using base_t = struple<Top, Xs...>;
@@ -1019,10 +1069,56 @@ auto make_clazz(As&&... argholders) {
     return clazz_t{std::move(argholders)...};
 }
 
+template<ArgHolder... As>
+auto make_clazz_asc(As&&... argholders) {
+    using clazz_t = flatten_tuples_t<typename As::clazz_t...>;
+    return sort_asc<clazz_t>{std::move(argholders)...};
+}
+
+template<ArgHolder... As>
+auto make_clazz_desc(As&&... argholders) {
+    using clazz_t = flatten_tuples_t<typename As::clazz_t...>;
+    return sort_desc<clazz_t>{std::move(argholders)...};
+}
+
+template<ArgHolder... As>
+auto make_clazz_decl(As&&... argholders) {
+    using clazz_t = flatten_tuples_t<typename As::clazz_t...>;
+    return bind_to_t<clazz_decl, clazz_t>{std::move(argholders)...};
+}
+
 template<class... Names, class... Targets, class... Ts>
 requires (!detail::arg::holder<std::tuple<Names>, Targets, Ts>::is_undetermined && ...)
 meta_clazz(detail::arg::holder<std::tuple<Names>, Targets, Ts>&&...) 
     -> meta_pod<typename detail::arg::holder<std::tuple<Names>, Targets, Ts>::var_t...>;
+
+namespace detail {
+    template<Clazz, class...>
+    struct build_clazz;
+
+    template<Symbol... S, Symbol... O, class... Ts>
+    struct build_clazz<clazz<S...>, clazz<O...>, Ts...> : build_clazz<clazz<S..., O...>, Ts...> {};
+
+    template<Symbol... S, Symbol O, class... Ts>
+    struct build_clazz<clazz<S...>, O, Ts...> : build_clazz<clazz<S..., O>, Ts...> {};
+
+    template<Clazz C>
+    struct build_clazz<C> {
+        using type = C;
+    };
+}
+
+template<class... Ts>
+using build_clazz = typename detail::build_clazz<clazz<>, Ts...>::type;
+
+template<class... Ts>
+using build_clazz_asc = sort_asc<build_clazz<Ts...>>;
+
+template<class... Ts>
+using build_clazz_desc = sort_desc<build_clazz<Ts...>>;
+
+template<class... Ts>
+using build_clazz_decl = bind_to_t<clazz_decl, build_clazz<Ts...>>;
 
 template<class... Fs>
 struct try_all : Fs... {
@@ -2300,6 +2396,14 @@ struct meta_clazz : clazz_info<clazz<X...>> {
     template<DataSymbol... Ts>
     using with_data = meta_clazz<X..., Ts...>;
 
+#ifdef CLAZZ_MEM_REV_ORDER
+    template<DataSymbol T>
+    using with_data_at_mem_front = meta_clazz<X..., T>;
+#else
+    template<DataSymbol T>
+    using with_data_at_mem_front = meta_clazz<T, X...>;
+#endif
+
     union {
         clazz_t fields;
         tuple_t tuple;
@@ -3088,7 +3192,7 @@ struct trait {
     static constexpr bool co_implementor = clazz_info<C>::template co_implements<Ds...>;
 
     template<Clazz C>
-    using variant_clazz_t = typename meta_clazz_t<C>::template with_data<padding<1>>::clazz_t;
+    using variant_clazz_t = typename meta_clazz_t<C>::template with_data_at_mem_front<padding<1>>::clazz_t;
     
     template<CoImplements<Ds...>... Variants>
     using variants_clazz_t = clazz < 
@@ -3097,17 +3201,6 @@ struct trait {
         // All trait defs callable with object.trait_def(...)
         typename dec_info<Ds>::template variant_def_t<variant_clazz_t<Variants>...>...
     >;
-};
-
-template<class>
-struct variant_ebo {};
-
-template<class V>
-struct variant : variant_ebo<variant<V>> {
-    const unsigned char index;
-    [[no_unique_address]] V v;
-    template<class... Ts>
-    constexpr variant(unsigned char i, Ts&&... in) noexcept : index(i), v(std::forward<Ts>(in)...) {}
 };
 
 template<class T>
@@ -3147,9 +3240,54 @@ private:
     requires is_one_of<T, Variants...>::value
     using variant_t = typename Trt::template variant_clazz_t<T>;
     
-    size_type write_head = 0;
-    std::vector<char> buffer;
+    static constexpr size_type Align = vmax(alignof(Variants)...);
     std::vector<size_type> positions;
+
+    struct freer {
+        void operator()(void* p) const { free(p); }
+    };
+    using buffer_t = std::unique_ptr<char, freer>;
+    buffer_t buffer;
+    size_type write_head = 0;
+    size_type capacity = 0;
+
+    inline char* get_buffer() {
+        return std::assume_aligned<Align>(buffer.get());
+    }
+    inline const char* get_buffer() const {
+        return std::assume_aligned<Align>(buffer.get());
+    }
+
+    static constexpr size_type var_sizes[] = { sizeof(variant_t<Variants>)... };
+
+    inline static constexpr size_type pad_to_align(size_type to_pad, size_type align = Align) {
+        return (to_pad + (align - 1)) & -align;
+    }
+
+    std::pair<buffer_t, size_type> _create_buffer(size_type size) {
+        size = pad_to_align(size);
+        return {buffer_t((char*)aligned_alloc(Align, size)), size};
+    }
+
+    void _replace_buffer(size_type size) {
+        if (capacity < size) {
+            auto [new_buffer, new_capacity] = _create_buffer(size);
+            for (size_type new_write_head = 0; auto& i : *this) {
+                detail::visit_clazz_variant<void, variant_t<Variants>...>(
+                    std::index_sequence_for<Variants...>{},
+                    (const char&)i, &i,
+                    [&, i = (const char&)i, new_buffer = std::assume_aligned<Align>(new_buffer.get())]<class T>(T& self) {
+                        new_write_head = pad_to_align(new_write_head, alignof(T));
+                        new (new_buffer + new_write_head) T(std::move(self));
+                        new_buffer[new_write_head] = i;
+                        self.~T();
+                        new_write_head += sizeof(T);
+                    });
+            }
+            buffer = std::move(new_buffer);
+            capacity = new_capacity;
+        }
+    }
 
 public:
     template<class T>
@@ -3164,51 +3302,53 @@ public:
         using value_t = variant_t<T>;
         constexpr size_type value_size = sizeof(value_t);
 
+        write_head = pad_to_align(write_head, alignof(value_t));
         positions.push_back(write_head);
-        buffer.reserve(write_head + value_size);
+        if (capacity < write_head + value_size)
+            _replace_buffer(2 * (write_head + value_size));
 
-        new (buffer.data() + write_head) value_t(std::forward<Ts>(args)...);
-        buffer[write_head] = index;
+        new (get_buffer() + write_head) value_t(std::forward<Ts>(args)...);
+        get_buffer()[write_head] = index;
 
         write_head += value_size;
         return back();
     }
     
     reference at(size_type pos) {
-        return reinterpret_cast<reference>(buffer[positions.at(pos)]);
+        return reinterpret_cast<reference>(get_buffer()[positions.at(pos)]);
     }
     const_reference at(size_type pos) const {
-        return reinterpret_cast<const_reference>(buffer[positions.at(pos)]);
+        return reinterpret_cast<const_reference>(get_buffer()[positions.at(pos)]);
     }
     reference operator[](size_type pos) {
-        return reinterpret_cast<reference>(buffer[positions[pos]]);
+        return reinterpret_cast<reference>(get_buffer()[positions[pos]]);
     }
     const_reference operator[](size_type pos) const {
-        return reinterpret_cast<const_reference>(buffer[positions[pos]]);
+        return reinterpret_cast<const_reference>(get_buffer()[positions[pos]]);
     }
     reference front() {
-        return reinterpret_cast<reference>(buffer[0]);
+        return reinterpret_cast<reference>(get_buffer()[0]);
     }
     const_reference front() const {
-        return reinterpret_cast<const_reference>(buffer[0]);
+        return reinterpret_cast<const_reference>(get_buffer()[0]);
     }
     reference back() {
-        return reinterpret_cast<reference>(buffer[positions.back()]);
+        return reinterpret_cast<reference>(get_buffer()[positions.back()]);
     }
     const_reference back() const {
-        return reinterpret_cast<const_reference>(buffer[positions.back()]);
+        return reinterpret_cast<const_reference>(get_buffer()[positions.back()]);
     }
     size_type size() const noexcept {
         return positions.size();
     }
     size_t data_size() const noexcept {
-        return buffer.size();
+        return write_head;
     }
     bool empty() const noexcept {
         return positions.empty();
     }
     void pop_back() {
-        auto& back = buffer[positions.back()];
+        auto& back = get_buffer()[positions.back()];
 
         // Destruct back element
         detail::visit_clazz_variant<void, variant_t<Variants>...>(
@@ -3217,12 +3357,10 @@ public:
 
         // Remove position and truncate buffer
         positions.pop_back();
-        buffer.resize(back);
+        write_head = positions.back() + var_sizes[get_buffer()[positions.back()]];
     }
 
 private:
-    static constexpr size_type var_sizes[] = { sizeof(variant<Variants>)... };
-
     template<bool Const>
     class _iterator {
         using value_type = hvector::value_type;
@@ -3240,12 +3378,12 @@ private:
 
     public:
         auto& operator++() {
-            pos += var_sizes[underlying.buffer[pos]];
+            pos += var_sizes[underlying.get_buffer()[pos]];
             return *this;
         }
         
         inline value_t& operator*() const {
-            return reinterpret_cast<value_t&>(underlying.buffer[pos]);
+            return reinterpret_cast<value_t&>(underlying.get_buffer()[pos]);
         }
         
         inline value_t* operator->() const {
@@ -3320,9 +3458,12 @@ private:
 
 public:
     void reserve(size_type elements) {
-        constexpr auto max = vmax(0, sizeof(variant<Variants>)...);
-        buffer.reserve(max * elements);
         positions.reserve(elements);
+
+        constexpr auto max = vmax(0, sizeof(variant_t<Variants>)...);
+        if (capacity < max * elements) {
+            _replace_buffer(max * elements);
+        }
     }
 
     hvector() {
@@ -3341,7 +3482,7 @@ private:
 public:
     void clear() {
         destruct_all();
-        buffer.clear();
+        write_head = 0;
         positions.clear();
     }
 
@@ -3429,12 +3570,12 @@ private:
     size_type _capacity;
     size_type _size;
 
-    struct malloc_deleter {
+    struct freer {
         void operator()(void* p) const { free(p); }
     };
 
     template<class T>
-    using buffer_t = std::unique_ptr<T, malloc_deleter>;
+    using buffer_t = std::unique_ptr<T, freer>;
     buffer_t<char> _buffer;
     arrays_t _arrays;
 
@@ -3625,7 +3766,7 @@ private:
 
     template<class T>
     inline static constexpr restrict_aligned_t<T*, std::max(Align, alignof(T))> _assume_aligned(T* array) noexcept {
-        return std::assume_aligned<Align>(array);
+        return std::assume_aligned<std::max(Align, alignof(T))>(array);
     }
 
     template<size_t I>
@@ -4590,13 +4731,20 @@ int foo(int argc, char** argv) {
         return 0;
     }
 
-    std::cout << type_name_v<sort_desc<clazz <
-        def size<void, []{}>,
+    std::cout << type_name_v<sort_asc<sort_asc<clazz_asc <
         var _1<int>,
         var _2<char>,
-        var _3<std::string>,
-        var _3<std::tuple<>>
-    >>> << '\n';
+        var _3<int>,
+        var _4<char>,
+        var _5<int>,
+        var _6<char>,
+        var _7<char>,
+        var _8<char>,
+        var _9<char>,
+        var _10<int>,
+        var _11<int>,
+        var _12<int>
+    >>>> << '\n';
 
     cus_ass ca1;
     ca1 = cus_ass{};
@@ -4760,12 +4908,14 @@ int foo(int argc, char** argv) {
     // return first + second;
     
     auto pv = hvector<n_trait
-        , sort_desc<var1>
-        , sort_desc<var2>
+        , sort_asc<var1>
+        , sort_asc<var2>
     >();
-    pv.emplace_back<var1>(1, 20, 300);
-    // pv.emplace_back<var1>(1, 20, 300);
-    // pv.emplace_back<var2>(1, 20, 300, 4000, 50000);
+    pv.emplace_back<var1>(arg _1 = 1, arg _2 = 20, arg _3 = 300);
+    pv.emplace_back<var1>(arg _1 = 1, arg _2 = 20, arg _3 = 300);
+    pv.pop_back();
+    pv.emplace_back<var2>(arg _1 = 1, arg _2 = 20, arg _3 = 300, arg _4 = 4000, arg _5 = 50000);
+    pv.reserve(200);
     int countv = 0;
     for(auto& i : pv) {
         countv += i._10();
