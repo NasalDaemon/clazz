@@ -319,8 +319,11 @@ Create a "vector of clazzes", with the memory arranged column-wise contiguously 
 * Optimised structural comparison with other cvectors
 ```c++
 using person = clazz <
-  var name <std::string>,
-  var age  <int>
+  var name  <std::string>,
+  var age   <int>,
+  def print <void() const, [](auto& self) {
+    std::cout << self.name << " is " << self.age << " years old\n";
+  }>
 >;
 
 // Default reserved memory is for 12 elements
@@ -337,7 +340,7 @@ persons.emplace_back(arg age = 23, arg name = "Joe Moe"); // Construct in place 
 // Creates one block of memory in one memory allocation for use by all fields,
 // with elements to be arranged in column-wise order in the memory block.
 // Moves existing elements into the newly allocated memory column-wise and frees the old.
-persons.reserve(20); 
+persons.reserve(20);
 
 // Sort in ascending order of name then age.
 // Sort algorithm is cache optimised for SoA by first finding a sorting order
@@ -347,8 +350,11 @@ persons.reserve(20);
 // sorting order is found without ever needing to query the age column.
 persons.sort();
 
-for (auto& person : persons) {
-  std::cout << person.name << " is " << person.age << " years old\n";
+for (auto& p : persons) {
+  std::cout << p.name << " is " << p.age << " years old\n";
+  // Each element is a view of a person, with each field in the view being a reference to 
+  // the respective element on each column in the SoA
+  static_assert(std::is_same_v<view_t<person>&, decltype(p)>);
 }
 
 // Prints:
@@ -364,8 +370,9 @@ persons.sort([](const auto& left, const auto& right) {
   return left.age < right.age;
 });
 
+// Can call defs on element type
 for (auto& person : persons) {
-  std::cout << person.name << " is " << person.age << " years old\n";
+  person.print();
 }
 
 // Prints:
