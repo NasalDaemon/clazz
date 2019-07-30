@@ -303,8 +303,9 @@ static_assert(sizeof(position) == 12 && sizeof(person) == 40);
 assert(hvec.data_size() == 2 * 16 + 40); // 2 * {char,int,int,int} + {char,int,std::string}
 // Uses 72 bytes vs 144, which is 3 * sizeof(std::variant<person,position>)
 
+// Call print(), which is declared in the printable trait, directly on element without ugly visitor syntax
 for (const auto& element : hvec)
-    element.print(); // Call print(), which is declared in the printable trait, directly on element without ugly visitor syntax
+    element.print();
 
 // Prints:
 // (0,0,0)
@@ -319,11 +320,11 @@ Create a "vector of clazzes", with the memory arranged column-wise contiguously 
 * Optimised structural comparison with other cvectors
 ```c++
 using person = clazz <
-  var name  <std::string>,
-  var age   <int>,
-  def print <void() const, [](auto& self) {
-    std::cout << self.name << " is " << self.age << " years old\n";
-  }>
+    var name  <std::string>,
+    var age   <int>,
+    def print <void() const, [](auto& self) {
+        std::cout << self.name << " is " << self.age << " years old\n";
+    }>
 >;
 
 // Default reserved memory is for 12 elements
@@ -351,10 +352,10 @@ persons.reserve(20);
 persons.sort();
 
 for (auto& p : persons) {
-  std::cout << p.name << " is " << p.age << " years old\n";
-  // Each element is a view of a person, with each field in the view being a reference to 
-  // the respective element on each column in the SoA
-  static_assert(std::is_same_v<view_t<person>&, decltype(p)>);
+    std::cout << p.name << " is " << p.age << " years old\n";
+    // Each element is a view of a person, with each field in the view being a reference to 
+    // the respective element on each column in the SoA
+    static_assert(std::is_same_v<view_t<person>&, decltype(p)>);
 }
 
 // Prints:
@@ -370,13 +371,36 @@ persons.sort([](const auto& left, const auto& right) {
   return left.age < right.age;
 });
 
-// Can call defs on element type
-for (auto& person : persons) {
-  person.print();
-}
+// Call defs on element type directly
+for (auto& person : persons)
+    person.print();
 
 // Prints:
 // John Smith is 21 years old
 // John Doe is 22 years old
 // Joe Moe is 23 years old
+
+// Can consume arbitrary (std) algorithms which move elements around based on the indices of the cvector.
+// Ensures that elements of cvector are moved column-wise when the final element permutation is found.
+size_t offset = soa.reorder([names = soa.array<tag name>()](size_t* begin, size_t* end) {
+    return std::stable_partition(begin, end, [=](size_t index) {
+        return names[index].ends_with("oe");
+    });
+});
+
+assert(soa[0] == person{"John Doe", 22});
+assert(soa[1] == person{"John Moe", 23});
+assert(soa[offset] == person{"John Smith", 21});
+
+// Efficient column-wise removal of elements with specialisation of std::erase_if
+std::erase_if(soa, [ages = soa.array<tag age>()](size_t index) {
+    return ages[index] > 21;
+});
+
+for (auto& person : persons)
+    person.print();
+
+// Prints:
+// John Smith is 21 years old
+
 ```
