@@ -3002,8 +3002,8 @@ public:
                 using std::swap;
                 (swap(get<symbol_tag_t<V>>(l), get<symbol_tag_t<V>>(r)), ...);
             }(typename clazz_info<clazz>::variables_info_t{});
-            std::cout << "inner friend swapped\n";
         }
+        std::cout << "inner friend swapped\n";
     }
 
     // Custom clazz swap for clazzes with the same variables
@@ -3018,8 +3018,8 @@ public:
                 using std::swap;
                 (swap(get<symbol_tag_t<V>>(l), get<symbol_tag_t<V>>(r)), ...);
             }(typename clazz_info<clazz>::variables_info_t{});
-            std::cout << "general inner friend swapped\n";
         }
+        std::cout << "general inner friend swapped\n";
     }
 
     template<Clazz T>
@@ -3091,15 +3091,6 @@ public:
     // }
 
 };
-
-template<Clazz L, ClazzOf<L> R>
-void swap(L& l, R& r) {
-    [&]<Variable... V>(clazz_info<clazz<V...>>) {
-        using std::swap;
-        (swap(get<symbol_tag_t<V>>(l), get<symbol_tag_t<V>>(r)), ...);
-    }(typename clazz_info<L>::variables_info_t{});
-    std::cout << "outer friend swapped\n";
-}
 
 template<Clazz C, Tuple T>
 requires std::is_same_v<T, typename meta_clazz_t<C>::tuple_t>
@@ -3203,31 +3194,6 @@ struct trait {
     >;
 };
 
-template<class T>
-constexpr decltype(auto) vmax(T&& val) {
-    return std::forward<T>(val);
-}
-
-template<class T0, class T1, class... Ts>
-constexpr decltype(auto) vmax(T0&& val1, T1&& val2, Ts&&... vs) {
-    return (val1 > val2) ?
-      vmax(val1, std::forward<Ts>(vs)...) :
-      vmax(val2, std::forward<Ts>(vs)...);
-}
-
-template<class T>
-constexpr decltype(auto) vmin(T&& val) {
-    return std::forward<T>(val);
-}
-
-template<class T0, class T1, class... Ts>
-constexpr decltype(auto) vmin(T0&& val1, T1&& val2, Ts&&... vs) {
-    return (val1 < val2) ?
-      vmin(val1, std::forward<Ts>(vs)...) :
-      vmin(val2, std::forward<Ts>(vs)...);
-}
-
-
 template<Trait Trt, ImplementsTrait<Trt>... Variants>
 struct hvector {
     using size_type = unsigned int;
@@ -3240,7 +3206,7 @@ private:
     requires is_one_of<T, Variants...>::value
     using variant_t = typename Trt::template variant_clazz_t<T>;
     
-    static constexpr size_type Align = vmax(alignof(Variants)...);
+    static constexpr size_type Align = std::max({alignof(Variants)...});
     std::vector<size_type> positions;
 
     struct freer {
@@ -3460,7 +3426,7 @@ public:
     void reserve(size_type elements) {
         positions.reserve(elements);
 
-        constexpr auto max = vmax(0, sizeof(variant_t<Variants>)...);
+        constexpr auto max = std::max({sizeof(variant_t<Variants>)...});
         if (capacity < max * elements) {
             _replace_buffer(max * elements);
         }
@@ -3546,10 +3512,16 @@ struct mapped_symbol<Wrapper, S> {
 template<template<class...> class Wrapper, Variable S>
 using mapped_symbol_t = typename mapped_symbol<Wrapper, S>::type;
 
+template<class, bool>
+struct cvector_iterator;
+
 template<Variable... X, size_t Align, Symbol... S>
 struct cvector_impl<clazz<X...>, Align, clazz<S...>> {
     template<class, size_t, class>
     friend struct cvector_impl;
+
+    template<class, bool>
+    friend struct cvector_iterator;
 
     // template<class... T>
     // using container_wrapper = std::vector<T...>;
@@ -3587,17 +3559,36 @@ private:
     size_type _capacity;
     size_type _size;
 
-    struct freer {
-        void operator()(void* p) const { free(p); }
-    };
-
     template<class T>
-    using buffer_t = std::unique_ptr<T, freer>;
+    struct buffer_t {     
+        buffer_t(size_type buffer_size) noexcept {
+            constexpr auto align = std::max(alignof(T), Align);
+            ptr = (T*)aligned_alloc(align, pad_to_align(buffer_size, align));
+        }
+
+        buffer_t(buffer_t&& other) noexcept : ptr{other.ptr} {
+            other.ptr = nullptr;
+        }
+
+        buffer_t& operator=(buffer_t&& other) noexcept {
+            free(ptr);
+            ptr = other.ptr;
+            other.ptr = nullptr;
+            return *this;
+        }
+
+        auto get() noexcept { return _assume_aligned(ptr); }
+        auto get() const noexcept { return _assume_aligned(ptr); }
+
+        ~buffer_t() { free(ptr); }
+    private:
+        T* ptr;
+    };
     buffer_t<char> _buffer;
     arrays_t _arrays;
 
-    static constexpr size_type default_capacity = 12;
-    static constexpr size_type min_size = 4;
+    static constexpr size_type min_size = std::max(size_type(4), std::min({(Align/sizeof(symbol_value_t<X>))...}));
+    static constexpr size_type default_capacity = std::max(min_size, size_type(12));
 
     cvector_impl(const offsets_t& offsets, size_type capacity, size_type size)
         : _capacity{capacity}
@@ -3718,16 +3709,7 @@ private:
 
     static buffer_t<char> _create_buffer(const offsets_t& offsets, size_type capacity) {
         size_type size = offsets.back() + capacity * sizes.back();
-        return _create_buffer<char>(size);
-    }
-
-    template<class T>
-    static buffer_t<T> _create_buffer(size_type buffer_size) {
-        if constexpr (Align != 0) {
-            return buffer_t<T>((T*)aligned_alloc(aligns[0], pad_to_align(buffer_size, aligns[0])));
-        } else {
-            return buffer_t<T>((T*)malloc(buffer_size));
-        }
+        return buffer_t<char>(size);
     }
 
     auto _create_arrays(char* buffer, const offsets_t& offsets) {
@@ -4032,6 +4014,22 @@ public:
         using sized_data_t = typename meta_clazz_t<arrays_t>::template with_data<var::_<clazz<var::size<size_type>>>>::clazz_t;
         return sized_data_t{get<symbol_tag_t<X>>(_arrays)..., _size};
     }
+    template<size_t I>
+    auto array() noexcept {
+        return _get_array<I>();
+    }
+    template<size_t I>
+    auto array() const noexcept {
+        return _get_array<I>();
+    }
+    template<Tag tag>
+    auto array() noexcept {
+        return _get_array<index_of<tag, X...>::value>();
+    }
+    template<Tag tag>
+    auto array() const noexcept {
+        return _get_array<index_of<tag, X...>::value>();
+    }
     size_type size() const noexcept {
         return _size;
     }
@@ -4048,113 +4046,8 @@ public:
         clear();
     }
 
-private:
-    template<bool Const>
-    struct _iterator {
-        using difference_type = std::ptrdiff_t;
-        using iterator_category = std::random_access_iterator_tag;
-
-    private:
-        template<class T>
-        using pointer_wrapper = std::conditional_t<Const, 
-                                                   std::add_pointer_t<std::add_const_t<T>> __restrict, 
-                                                   std::add_pointer_t<T> __restrict>;
-
-        using pointers = clazz <
-            mapped_symbol_t<pointer_wrapper, X>...
-        >;
-
-        template<class T>
-        using reference_wrapper = std::conditional_t<Const, 
-                                                     std::add_lvalue_reference_t<std::add_const_t<T>> __restrict, 
-                                                     std::add_lvalue_reference_t<T> __restrict>;
-
-        using references = clazz <
-            def::operator_swap<void, []<class T>(T& self, T& other) {
-                using std::swap;
-                (swap(get<symbol_tag_t<X>>(self), get<symbol_tag_t<X>>(other)), ...);
-                std::cout << "operator swapped\n";
-            }>,
-            ovl::operator_assign<
-                // Custom move assignment swaps elements (required for efficient sorting)
-                def::operator_assign<void, []<class T>(T& self, T&& other) {
-                    using std::swap;
-                    (swap(get<symbol_tag_t<X>>(self), get<symbol_tag_t<X>>(other)), ...);
-                    std::cout << "assign swapped\n";
-                }>,
-                def::operator_assign<void, []<class T>(T& self, T& other) {
-                    ((get<symbol_tag_t<X>>(self) = get<symbol_tag_t<X>>(other)), ...);
-                    std::cout << "assign copied\n";
-                }>
-            >,
-            mapped_symbol_t<reference_wrapper, S>...
-        >;
-
-        pointers ptrs;
-
-        template<class... T>
-        _iterator(T*... ptrs_) : ptrs{ptrs_...} {}
-
-    public:
-        _iterator(const _iterator& other) : ptrs{other.ptrs} {}
-
-        using value_type = references;
-        using reference = value_type&;
-        using pointer = value_type*;
-
-        _iterator& operator++() {
-            (++get<symbol_tag_t<X>>(ptrs), ...);
-            return *this;
-        }
-
-        _iterator& operator--() {
-            (--get<symbol_tag_t<X>>(ptrs), ...);
-            return *this;
-        }
-
-        _iterator& operator=(const _iterator& other) {
-            ptrs = other.ptrs;
-            return *this;
-        }
-
-        difference_type operator-(const _iterator& other) const {
-            return get<0>(ptrs) - get<0>(other.ptrs);
-        }
-
-        _iterator operator-(int n) const {
-            return _iterator{(get<symbol_tag_t<X>>(ptrs) - n)...};
-        }
-
-        _iterator operator+(int n) const {
-            return _iterator{(get<symbol_tag_t<X>>(ptrs) + n)...};
-        }
-
-        bool operator<(const _iterator& other) const {
-            return get<0>(ptrs) < get<0>(other.ptrs);
-        }
-        
-        inline reference operator*() const {
-            // Safe to const_cast, since a reference is essentially a const-pointer with syntactic sugar
-            // i.e. {T& field} <==> const{T* field}, since references cannot change what they point to
-            return union_cast<reference>(const_cast<pointers&>(ptrs));
-        }
-
-        inline pointer operator->() const {
-            return &**this;
-        }
-
-        inline bool operator==(const _iterator& other) const {
-            return ptrs == other.ptrs;
-        }
-        
-        inline bool operator!=(const _iterator& other) const {
-            return !(*this == other);
-        }
-    };
-
-public:
-    using iterator = _iterator<false>;
-    using const_iterator = _iterator<true>;
+    using iterator = cvector_iterator<cvector_impl, false>;
+    using const_iterator = cvector_iterator<cvector_impl, true>;
 
     inline iterator begin() {
         return _apply_arrays([](auto*... array) {
@@ -4222,37 +4115,76 @@ public:
     template<class Comp>
     requires std::is_invocable_r_v<bool, Comp&&, size_type, size_type>
     void sort_by_index(Comp&& comp) {
-        // Allocate all the memory needed in one go, and align it
-        size_type buffer_size = pad_to_align(_size * sizeof(size_type));
-        auto buffer = _create_buffer<char>(2 * buffer_size);
-        // Divide it up into two arrays
-        size_type* __restrict indices = _assume_aligned((size_type*)buffer.get());
-        size_type* __restrict swaps = _assume_aligned((size_type*)(buffer.get() + buffer_size));
-
-        // Create a list of indices for each element in the cvector
-        std::iota(indices, indices + _size, 0);
-        // Find the resulting locations of the indices after the cvector is in sorted order
-        std::sort(indices, indices + _size, [&](size_type l, size_type r) -> bool {
-            return std::invoke(std::forward<Comp>(comp), l, r); 
+        reorder([&](auto begin, auto end) {
+            std::sort(begin, end, [&](size_type l, size_type r) -> bool {
+                return std::invoke(std::forward<Comp>(comp), l, r); 
+            });
         });
+    }
 
-        // Initialise swaps array
-        constexpr auto nullpos = (size_type)-1;
-        std::fill_n(swaps, _size, nullpos);
+    template<class Algo>
+    requires std::is_invocable_v<Algo&&, size_type*, size_type*>
+    decltype(auto) reorder(Algo&& algo) {
+#define CLAZZ_CVECTOR_FUNC() std::invoke(std::forward<Algo>(algo), indices.get(), indices.get() + _size)
 
-        // Find out which elements to swap to fulfill the order specified by indices
-        for (size_type i = 0; i < _size; ++i) {
-            auto pos = indices[i];
-            // If element to swap has already been swapped to a different location itself, find it
-            while (swaps[pos] != nullpos)
-                pos = swaps[pos];
-            swaps[i] = pos;
+        auto indices = get_indices();
+        using result_t = decltype(CLAZZ_CVECTOR_FUNC());
+        if constexpr (std::is_same_v<result_t, void>) {
+            CLAZZ_CVECTOR_FUNC();
+            permute_by_index(indices);
+        } else if constexpr (std::is_same_v<result_t, size_type*>) {
+            auto res = CLAZZ_CVECTOR_FUNC();
+            permute_by_index(indices);
+            return res - indices.get();
+        } else {
+            static_assert(false_v<>, "Return type of algorithm must be size_type* or void");
+        }
+    }
+
+    template<class Algo>
+    requires std::is_invocable_v<Algo&&, size_type*, size_type*>
+    decltype(auto) move_elements(Algo&& algo) {
+        auto indices = get_indices();
+        using result_t = decltype(CLAZZ_CVECTOR_FUNC());
+        if constexpr (std::is_same_v<result_t, void>) {
+            CLAZZ_CVECTOR_FUNC();
+            move_by_index(indices);
+        } else if constexpr (std::is_same_v<result_t, size_type*>) {
+            auto res = CLAZZ_CVECTOR_FUNC();
+            move_by_index(indices);
+            return res - indices.get();
+        } else {
+            static_assert(false_v<>, "Return type of algorithm must be size_type* or void");
+        }
+
+#undef CLAZZ_CVECTOR_FUNC
+    }
+
+    void permute_by_index(const size_type* __restrict indices) {
+        // Find out which elements to swap to fulfill the final positions specified by indices
+        // indices[i]: current position of element that should be at position i to reach sorted order
+        // swaps[i]: position of element that element currently at poisition i should swap with
+        //           in single pass to reach sorted order
+
+        // Last element will end up in correct position after all previous elements have been swapped,
+        // so there is no need to calculate, store, or use the last swap index
+        auto swaps_size = _size - 1; 
+        auto buffer = buffer_t<size_type>(swaps_size * sizeof(size_type));
+        size_type* __restrict swaps = _assume_aligned(buffer.get());
+
+        for (size_type i = 0; i < swaps_size; ++i) { 
+            swaps[i] = indices[i];
+            // indices[i] is: position of element before swapping that should be swapped into in position i
+            // If element to swap has already been swapped into its final position,
+            // i.e. one of the previously visited positions in this pass, find the element it swapped with
+            while (swaps[i] < i) 
+                swaps[i] = swaps[swaps[i]];
         }
 
         // For each array in this cvector, swap the elements into their target positions in memory
-        _for_each([this, swaps = _assume_aligned(swaps)](auto* __restrict array) {
+        _for_each([swaps_size, swaps = _assume_aligned(swaps)](auto* __restrict array) {
             array = _assume_aligned(array);
-            for (size_type i = 0; i < _size; ++i) {
+            for (size_type i = 0; i < swaps_size; ++i) {
                 if (swaps[i] != i) {
                     using std::swap;
                     swap(array[i], array[swaps[i]]);
@@ -4261,6 +4193,55 @@ public:
         });
     }
 
+private:
+    buffer_t<size_type> get_indices() const {
+        auto indices = buffer_t<size_type>(_size * sizeof(size_type));
+        std::iota(indices.get(), indices.get() + _size, 0);
+        return indices;
+    }
+
+    void permute_by_index(buffer_t<size_type>& indices) {
+        auto swaps = indices.get();
+
+        // Last element will end up in correct position after all previous elements have been swapped,
+        // so there is no need to calculate, store, or use the last swap index
+        auto swaps_size = _size - 1;
+
+        // Find out which elements to swap to fulfill the final positions specified by indices
+        // Before loop: swaps[i] is current position of element that should be at position i to reach sorted order
+        // After loop:  swaps[i] is position of element that element currently at poisition i should swap with
+        //                in single pass to reach sorted order
+        for (size_type i = 0; i < swaps_size; ++i)
+            while (swaps[i] < i) 
+                swaps[i] = swaps[swaps[i]];
+
+        // For each array in this cvector, swap the elements into their target positions in memory
+        _for_each([swaps_size, swaps](auto* __restrict array) {
+            array = _assume_aligned(array);
+            for (size_type i = 0; i < swaps_size; ++i) {
+                if (swaps[i] != i) {
+                    using std::swap;
+                    swap(array[i], array[swaps[i]]);
+                }
+            }
+        });
+    }
+
+    void move_by_index(buffer_t<size_type>& indices) {
+        auto moves = indices.get();
+
+        // For each array in this cvector, swap the elements into their target positions in memory
+        _for_each([this, moves](auto* __restrict array) {
+            array = _assume_aligned(array);
+            for (size_type i = 0; i < _size; ++i) {
+                if (moves[i] != i) {
+                    array[i] = std::move(array[moves[i]]);
+                }
+            }
+        });
+    }
+
+public:
     // Same as sort(), but moves elements into a newly allocated buffer in sorted order
     // rather than moving elements around inside the existing buffer. New size is 2*size()
     inline void sort_new() {
@@ -4298,7 +4279,7 @@ public:
     template<class Comp>
     requires std::is_invocable_r_v<bool, Comp&&, size_type, size_type>
     void sort_new_by_index(Comp&& comp, size_type new_size) {
-        auto buffer = _create_buffer<size_type>(_size * sizeof(size_type));
+        auto buffer = buffer_t<size_type>(_size * sizeof(size_type));
         size_type* __restrict indices = _assume_aligned(buffer.get());
         
         // Create a list of indices for each element in the cvector
@@ -4394,6 +4375,116 @@ public:
 //     }
 };
 
+template<Symbol... X, size_t Align, Symbol... S, bool Const>
+struct cvector_iterator<cvector_impl<clazz<X...>, Align, clazz<S...>>, Const> {
+    using difference_type = std::ptrdiff_t;
+    using iterator_category = std::random_access_iterator_tag;
+    
+    friend struct cvector_impl<clazz<X...>, Align, clazz<S...>>;
+
+private:
+    template<class T>
+    using pointer_wrapper = std::conditional_t<Const, 
+                                                std::add_pointer_t<std::add_const_t<T>> __restrict, 
+                                                std::add_pointer_t<T> __restrict>;
+
+    using pointers = clazz <
+        mapped_symbol_t<pointer_wrapper, X>...
+    >;
+
+    template<class T>
+    using reference_wrapper = std::conditional_t<Const, 
+                                                    std::add_lvalue_reference_t<std::add_const_t<T>> __restrict, 
+                                                    std::add_lvalue_reference_t<T> __restrict>;
+
+    using references = clazz <
+        def::operator_swap<void, []<class T>(T& self, T& other) {
+            using std::swap;
+            (swap(get<symbol_tag_t<X>>(self), get<symbol_tag_t<X>>(other)), ...);
+            std::cout << "operator swapped\n";
+        }>,
+        // fun::operator_ctor<void, []<class T>(T&& other) {
+        //     return T{get<symbol_tag_t<X>>(other)...};
+        // }>,
+        ovl::operator_assign<
+            // Custom move assignment swaps elements (required for efficient sorting)
+            def::operator_assign<void, []<class T>(T& self, T&& other) {
+                // swap(self, other);
+                // using std::swap;
+                // (swap(get<symbol_tag_t<X>>(self), get<symbol_tag_t<X>>(other)), ...);
+                ((get<symbol_tag_t<X>>(self) = std::move(get<symbol_tag_t<X>>(other))), ...);
+                std::cout << "move operator assign\n";
+            }>,
+            def::operator_assign<void, []<class T>(T& self, T& other) {
+                ((get<symbol_tag_t<X>>(self) = get<symbol_tag_t<X>>(other)), ...);
+                std::cout << "copy operator assign\n";
+            }>
+        >,
+        mapped_symbol_t<reference_wrapper, S>...
+    >;
+
+    pointers ptrs;
+
+    template<class... T>
+    cvector_iterator(T*... ptrs_) : ptrs{ptrs_...} {}
+
+public:
+    cvector_iterator(const cvector_iterator& other) : ptrs{other.ptrs} {}
+
+    using value_type = references;
+    using reference = value_type&;
+    using pointer = value_type*;
+
+    cvector_iterator& operator++() {
+        (++get<symbol_tag_t<X>>(ptrs), ...);
+        return *this;
+    }
+
+    cvector_iterator& operator--() {
+        (--get<symbol_tag_t<X>>(ptrs), ...);
+        return *this;
+    }
+
+    cvector_iterator& operator=(const cvector_iterator& other) {
+        ptrs = other.ptrs;
+        return *this;
+    }
+
+    difference_type operator-(const cvector_iterator& other) const {
+        return get<0>(ptrs) - get<0>(other.ptrs);
+    }
+
+    cvector_iterator operator-(int n) const {
+        return cvector_iterator{(get<symbol_tag_t<X>>(ptrs) - n)...};
+    }
+
+    cvector_iterator operator+(int n) const {
+        return cvector_iterator{(get<symbol_tag_t<X>>(ptrs) + n)...};
+    }
+
+    bool operator<(const cvector_iterator& other) const {
+        return get<0>(ptrs) < get<0>(other.ptrs);
+    }
+    
+    inline reference operator*() const {
+        // Safe to const_cast, since a reference is essentially a const-pointer with syntactic sugar
+        // i.e. {T& field} <==> const{T* field}, since references cannot change what they point to
+        return union_cast<reference>(const_cast<pointers&>(ptrs));
+    }
+
+    inline pointer operator->() const {
+        return &**this;
+    }
+
+    inline bool operator==(const cvector_iterator& other) const {
+        return ptrs == other.ptrs;
+    }
+    
+    inline bool operator!=(const cvector_iterator& other) const {
+        return !(*this == other);
+    }
+};
+
 // TODO: Consider binary search for variant index
 namespace detail {
     template<class R, class... Variants, size_t I, size_t... Is, class F, class... Ts>
@@ -4443,23 +4534,32 @@ namespace std {
         }
     };
 
-    template<CLAZZ_NS::Clazz L, CLAZZ_NS::Clazz R>
-    requires CLAZZ_NS::ClazzOf<typename CLAZZ_NS::clazz_info<L>::variables_info_t::clazz_t, 
-                               typename CLAZZ_NS::clazz_info<R>::variables_info_t::clazz_t>
-    void swap(L& l, R& r) {
-        using namespace CLAZZ_NS;
-        [&]<Variable... V>(clazz_info<clazz<V...>>) {
-            using std::swap;
-            (swap(get<symbol_tag_t<V>>(l), get<symbol_tag_t<V>>(r)), ...);
-        }(typename clazz_info<L>::variables_info_t{});
-        std::cout << "std swapped\n";
-    }
-
-    template<class... X>
-    void iter_swap(CLAZZ_NS::clazz<X...>& l, CLAZZ_NS::clazz<X...>& r) {
+    template<CLAZZ_NS::Clazz L>
+    void swap(L& l, L& r) {
         swap(l, r);
         std::cout << "std swapped\n";
     }
+
+    template<class CV, bool B>
+    void iter_swap(CLAZZ_NS::cvector_iterator<CV, B>& l, CLAZZ_NS::cvector_iterator<CV, B>& r) {
+        swap(*l, *r);
+        std::cout << "std iter swapped\n";
+    }
+
+    template<class T, size_t A, class U, class V>
+    void erase(CLAZZ_NS::cvector_impl<T, A, U>& c, const V& value) {
+        c.resize(c.move_elements([&](auto begin, auto end) {
+            return std::remove(begin, end, value);
+        }));
+    }
+
+    template<class T, size_t A, class U, class Pred>
+    void erase_if(CLAZZ_NS::cvector_impl<T, A, U>& c, Pred pred) {
+        c.resize(c.move_elements([&](auto begin, auto end) {
+            return std::remove_if(begin, end, pred);
+        }));
+    }
+
 }
 
 // TEST CODE
@@ -4795,7 +4895,9 @@ int foo(int argc, char** argv) {
     int n;
     std::string s;
     auto t1 = clazz<var _1<int&>, var _2<std::string&>>(n, s);
-    std::swap(t1, t1);
+    auto t2 = clazz<var _1<int&>, var _2<std::string&>>(n, s);
+    std::cout << "std::swap\n";
+    std::swap(t1, t2);
 
     int soa_count = 0;
     using soa_el = clazz<
@@ -4808,7 +4910,7 @@ int foo(int argc, char** argv) {
     >;
     cvector<soa_el> soa;
 
-    std::cout << type_name_v<decltype(soa.data())>;
+    std::cout << type_name_v<decltype(soa.data())> << '\n';
 
     std::cout << "push (3,no)...\n";
     soa.push_back({3, "no"});
@@ -4874,19 +4976,23 @@ int foo(int argc, char** argv) {
     soa.sort([](const Clazz& l, const Clazz& r) {
         return clazz_comparator<tag _3, tag _1, tag _2>::strong_less_than(l, r);   
     });
-    std::cout << "append1... \n";
-    soa.append(soa);
-    std::cout << "append2... \n";
-    soa.reserve(4*soa.size()); // Ensure soa.data() doesn't become old
-    soa.append(soa.size(), soa.data());
-    std::cout << "append3... \n";
-    soa.append(soa.size(), clazz{arg _1 = [&](size_t i) {
-        return soa[i]._1;
-    }, arg _2 = [&](size_t i) {
-        return soa[i]._2;
-    }, arg _3 = [&](size_t i) {
-        return soa[i]._3;
-    }});
+    std::cout << "removing where _1 is 20 or between 15 and 18 ...\n";
+    std::erase_if(soa, [_1 = soa.array<tag _1>()](auto i) {
+        return (_1[i] >= 15 && _1[i] <= 18) || _1[i] == 20;
+    });
+    // std::cout << "append1... \n";
+    // soa.append(soa);
+    // std::cout << "append2... \n";
+    // soa.reserve(4*soa.size()); // Ensure soa.data() doesn't become old
+    // soa.append(soa.size(), soa.data());
+    // std::cout << "append3... \n";
+    // soa.append(soa.size(), clazz{arg _1 = [&](size_t i) {
+    //     return soa[i]._1;
+    // }, arg _2 = [&](size_t i) {
+    //     return soa[i]._2;
+    // }, arg _3 = [&](size_t i) {
+    //     return soa[i]._3;
+    // }});
     for(auto& el : soa) {
         soa_count += el._1 + el._2.length();
         el.print();
