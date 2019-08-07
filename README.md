@@ -62,6 +62,7 @@ using ABC = clazz <
 - [ ] Hash for any clazz (waiting on GCC to add more constexpr support approved for C++2a)
 - [ ] De/serialisation - haven't got around to implementing it yet
 - [ ] Making this a library - it's still just a sequence of (functioning) brain farts in a main.cpp demo file
+- [ ] Use modules for symbols instead of headers to reduce compile-time cost of symbols
 - [ ] Use a friendlier license when this library becomes usable
 
 # Greatest hits
@@ -78,7 +79,7 @@ using ABC = clazz <
 Use a clazz directly, without having defined a name for it.
 ```c++
 clazz<var first_name<std::string>, var last_name<std::string>> name() {
-  return {"John", "Smith"};
+    return {"John", "Smith"};
 }
 
 auto n1 = name();
@@ -86,6 +87,24 @@ auto n2 = clazz{arg last_name = "Smith"s, arg first_name = "John"s};
 
 cout << n1.first_name << " " << n1.last_name << '\n'; // John Smith
 cout << n2.first_name << " " << n2.last_name << '\n'; // John Smith
+
+// Specify acceptable interface of clazz parameter inline
+void print1(const Implements<dec first_name<std::string>, dec last_name<std::string>> auto& person) {
+    cout << n1.last_name ", " << n1.first_name << '\n';
+}
+
+print1(n1); // Smith, John
+print1(n2); // Smith, John
+
+// Or specify a named trait
+using person = trait<dec first_name<std::string>, dec last_name<std::string>>;
+void print2(const ImplementsTrait<person> auto& person) {
+    print1(person);
+}
+
+print2(n1); // Smith, John
+print2(n2); // Smith, John
+
 ```
 ### 2. <a name="greatest-hits-comparison"></a>Structural comparison of clazzes by field names in objective strict total ordering
 All clazzes which share field names, where those fields have comparable types, are comparable in objective strict total order.
@@ -129,8 +148,8 @@ auto amount2 = clazz{arg currency = "GBP"sv, arg amount = 1}; // {currency: "GBP
 
 // Named clazz with default values
 using amount_t = clazz <
-  var amount   <int, 1>, // Default amount is 1
-  var currency <std::string, []{ return "GBP"; }> // Default currency is GBP
+    var amount   <int, 1>, // Default amount is 1
+    var currency <std::string, []{ return "GBP"; }> // Default currency is GBP
 >;
 
 auto amount3 = amount_t(); // {amount: 1, currency: "GBP"}
@@ -141,7 +160,7 @@ auto amount6 = amount_t(arg currency = "GBP", arg amount = 1); // {amount: 1, cu
 auto amount7 = amount_t(1, "GBP"); // {amount: 1, currency: "GBP"}
 
 auto get_amount(amount_t amount) {
-  return amount;
+    return amount;
 }
 
 auto amountGBP = get_amount({}); // {amount: 1, currency: "GBP"}
@@ -351,11 +370,11 @@ persons.reserve(20);
 // sorting order is found without ever needing to query the age column.
 persons.sort();
 
-for (auto& p : persons) {
-    std::cout << p.name << " is " << p.age << " years old\n";
+for (auto& person_view : persons) {
+    std::cout << person_view.name << " is " << person_view.age << " years old\n";
     // Each element is a view of a person, with each field in the view being a reference to 
     // the respective element on each column in the SoA
-    static_assert(std::is_same_v<view_t<person>&, decltype(p)>);
+    static_assert(std::is_same_v<view_t<person>&, decltype(person_view)>);
 }
 
 // Prints:
@@ -368,7 +387,7 @@ for (auto& p : persons) {
 // the respective elements are moved into their final position, since the
 // sorting order is found without ever needing to query the name column.
 persons.sort([](const auto& left, const auto& right) {
-  return left.age < right.age;
+    return left.age < right.age;
 });
 
 // Call defs on element type directly
@@ -382,25 +401,27 @@ for (auto& person : persons)
 
 // Can consume arbitrary (std) algorithms which move elements around based on the indices of the cvector.
 // Ensures that elements of cvector are moved column-wise when the final element permutation is found.
-size_t offset = soa.reorder([names = soa.array<tag name>()](size_t* begin, size_t* end) {
+// Note: persons->name[index] is equivalent to persons[index].name, although the former is a slightly more
+// efficient way to get the value of name at index, as it calculates the offset for the name column only.
+size_t offset = persons.permute_by_index([names = persons->name](size_t* begin, size_t* end) {
     return std::stable_partition(begin, end, [=](size_t index) {
         return names[index].ends_with("oe");
     });
 });
 
-assert(soa[0] == person{"John Doe", 22});
-assert(soa[1] == person{"John Moe", 23});
-assert(soa[offset] == person{"John Smith", 21});
+assert(persons[0] == person{"John Doe", 22});
+assert(persons[1] == person{"John Moe", 23});
+assert(persons[offset] == person{"John Smith", 21});
 
 // Efficient column-wise removal of elements with specialisation of std::erase_if
-std::erase_if(soa, [ages = soa.array<tag age>()](size_t index) {
-    return ages[index] > 21;
-});
+std::erase_if(persons, [&](size_t index) { return persons->age[index] > 21; });
+
+// Equivalently, the predicate could be for persons::reference
+// std::erase_if(persons, [&](Clazz auto person) { return person.age > 21; }); 
 
 for (auto& person : persons)
     person.print();
 
 // Prints:
 // John Smith is 21 years old
-
 ```
