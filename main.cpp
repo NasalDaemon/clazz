@@ -245,6 +245,9 @@ template<class T>
 concept bool Declaration = dec_info<T>::is_dec;
 
 template<class T>
+concept bool MethodDeclaration = dec_info<T>::is_dec && dec_info<T>::is_method;
+
+template<class T>
 concept bool StaticDeclaration = Declaration<T> && dec_info<T>::is_static;
 
 template<class>
@@ -370,20 +373,26 @@ concept bool Implements = Clazz<T> && clazz_info<T>::template implements<Decs...
 template<class T, class... Decs>
 concept bool CoImplements = Clazz<T> && clazz_info<T>::template co_implements<Decs...>;
 
+template<class T, class... Decs>
+concept bool ContraImplements = Clazz<T> && clazz_info<T>::template contra_implements<Decs...>;
+
 template<Declaration... Ds>
-struct trait;
+struct trait {};
 
 template<class>
-struct is_trait : std::false_type {};
-
-template<class... Ds>
-struct is_trait<trait<Ds...>> : std::true_type {};
+struct trait_info {
+    static constexpr bool is_trait = false;
+    static constexpr bool pure = false;
+};
 
 template<class T>
-concept bool Trait = is_trait<std::decay_t<T>>::value;
+concept bool Trait = trait_info<std::decay_t<T>>::is_trait;
+
+template<class T>
+concept bool PureTrait = Trait<T> && trait_info<std::decay_t<T>>::pure;
 
 template<class C, class T>
-concept bool ImplementsTrait = Clazz<C> && Trait<T> && std::decay_t<T>::template co_implementor<C>;
+concept bool ImplementsTrait = Clazz<C> && Trait<T> && trait_info<std::decay_t<T>>::template co_implementor<std::decay_t<C>>;
 
 template<Clazz SubClazz, Clazz SuperClazz>
 struct clazz_is_subclazz_of : std::false_type {};
@@ -475,6 +484,8 @@ struct call_signature {
     static constexpr bool is_call = false;
     static constexpr bool is_const = std::is_const_v<T>;
     using as_const = std::add_const_t<T>;
+    using as_call = std::add_lvalue_reference_t<T>();
+    using as_const_call = std::add_lvalue_reference_t<as_const>();
     template<class F, class... Ts>
     static constexpr bool is_partial_application_of = false;
     template<class F, class... Ts>
@@ -487,6 +498,8 @@ struct call_signature<R(Args...)> {
     static constexpr bool is_call = true;
     static constexpr bool is_const = false;
     using as_const = R(Args...) const;
+    using as_call = R(Args...);
+    using as_const_call = R(Args...) const;
     template<class F, class... Ts>
     static constexpr bool is_partial_application_of = std::is_invocable_r_v<R, F, Ts..., Args...>;
     template<class F, class... Ts>
@@ -500,6 +513,8 @@ struct call_signature<R(Args...) const> {
     static constexpr bool is_const = true;
     static constexpr bool is_getter = sizeof...(Args) == 0;
     using as_const = R(Args...) const;
+    using as_call = R(Args...) const;
+    using as_const_call = R(Args...) const;
     template<class F, class... Ts>
     static constexpr bool is_partial_application_of = std::is_invocable_r_v<R, F, Ts..., Args...>;
     template<class F, class... Ts>
@@ -1277,6 +1292,7 @@ namespace detail {
             using return_t = typename call_signature<DecType>::return_t;\
             static constexpr bool is_dec = true;\
             static constexpr bool is_static = Static;\
+            static constexpr bool is_method = call_signature<DecType>::is_call;\
             template<class... Variants>\
             struct variant_def {\
                 using type = detail::def::tag_name ## _i<int, DecType, decltype([]<class... Os>(auto& self, Os&&... args) {\
@@ -1580,7 +1596,7 @@ struct symbol_queries : tag_queries<TagName>, dec_queries<Dec> {};
             STRUPLE_ALIAS_VAL(tag_name, tag_name);\
         }\
         template<class T, class Value>\
-        struct symbol_info<detail::val::tag_name ## _i<T, Value>> : symbol_queries<tag::tag_name, dec::tag_name<T>> {\
+        struct symbol_info<detail::val::tag_name ## _i<T, Value>> : symbol_queries<tag::tag_name, dec::tag_name<T, true>> {\
             using value_t = T;\
             using symbol_t = detail::val::tag_name ## _i<T, Value>;\
             static constexpr symbol_type type = symbol_type::val;\
@@ -3177,15 +3193,20 @@ using view_t = typename view<T, false, Tags...>::type;
 template<class T, Tag... Tags>
 using const_view_t = typename view<T, true, Tags...>::type;
 
-template<Declaration... Ds>
-struct trait {
+template<class... Ds>
+struct trait_info<trait<Ds...>> {
+    static constexpr bool is_trait = true;
+    static constexpr bool pure = (MethodDeclaration<Ds> && ...);
+
     template<Clazz C>
     static constexpr bool co_implementor = clazz_info<C>::template co_implements<Ds...>;
 
     template<Clazz C>
+    requires pure
     using variant_clazz_t = typename meta_clazz_t<C>::template with_data_at_mem_front<padding<1>>::clazz_t;
     
     template<CoImplements<Ds...>... Variants>
+    requires pure
     using variants_clazz_t = clazz < 
         // Variant index stored under object._.index
         padding<1>,
@@ -3194,17 +3215,17 @@ struct trait {
     >;
 };
 
-template<Trait Trt, ImplementsTrait<Trt>... Variants>
+template<PureTrait Trt, ImplementsTrait<Trt>... Variants>
 struct hvector {
     using size_type = unsigned int;
-    using value_type = typename Trt::template variants_clazz_t<Variants...>;
+    using value_type = typename trait_info<Trt>::template variants_clazz_t<Variants...>;
     using reference = value_type&;
     using const_reference = const value_type&;
 
 private:
     template<class T>
     requires is_one_of<T, Variants...>::value
-    using variant_t = typename Trt::template variant_clazz_t<T>;
+    using variant_t = typename trait_info<Trt>::template variant_clazz_t<T>;
     
     static constexpr size_type Align = std::max({alignof(Variants)...});
     std::vector<size_type> positions;
@@ -3638,7 +3659,8 @@ public:
     void resize(size_type n) {
         if (n > _capacity) {
             _resize_buffer(n);
-        } else if (n < _size) {
+        } 
+        if (n < _size) {
             _for_each([n, this]<class T>(T* array) {
                 if constexpr (!std::is_trivially_destructible_v<T>) {
                     array = _assume_aligned(array);
@@ -3648,6 +3670,13 @@ public:
                 }
             });
             _size = n;
+        } else if (n > _size) {
+            _for_each([n, this]<class T>(T* array) {
+                array = _assume_aligned(array);
+                for(size_type i = n; i < _size; ++i) {
+                    new (array + i) T();
+                }
+            });
         }
     }
 
@@ -4030,6 +4059,12 @@ public:
     auto array() const noexcept {
         return _get_array<index_of<tag, X...>::value>();
     }
+    const auto& arrays() const noexcept {
+        return _arrays;
+    }
+    const auto* operator->() const noexcept {
+        return &_arrays;
+    }
     size_type size() const noexcept {
         return _size;
     }
@@ -4075,6 +4110,13 @@ public:
             return const_iterator{(array + _size)...};
         });
     }
+    
+    void erase(iterator it) {
+        auto [min, max] = std::minmax({(get<X>(it) - get<X>(_arrays))...});
+        assert(min == max);
+        assert(min >= 0 && min < _size);
+        resize(min);
+    }
 
 private:
     bool _less_than_by_index(size_type l, size_type r) const {
@@ -4115,7 +4157,7 @@ public:
     template<class Comp>
     requires std::is_invocable_r_v<bool, Comp&&, size_type, size_type>
     void sort_by_index(Comp&& comp) {
-        reorder([&](auto begin, auto end) {
+        permute_by_index([&](auto begin, auto end) {
             std::sort(begin, end, [&](size_type l, size_type r) -> bool {
                 return std::invoke(std::forward<Comp>(comp), l, r); 
             });
@@ -4124,7 +4166,7 @@ public:
 
     template<class Algo>
     requires std::is_invocable_v<Algo&&, size_type*, size_type*>
-    decltype(auto) reorder(Algo&& algo) {
+    decltype(auto) permute_by_index(Algo&& algo) {
 #define CLAZZ_CVECTOR_FUNC() std::invoke(std::forward<Algo>(algo), indices.get(), indices.get() + _size)
 
         auto indices = get_indices();
@@ -4555,8 +4597,18 @@ namespace std {
 
     template<class T, size_t A, class U, class Pred>
     void erase_if(CLAZZ_NS::cvector_impl<T, A, U>& c, Pred pred) {
+        using cvector_t = CLAZZ_NS::cvector_impl<T, A, U>;
         c.resize(c.move_elements([&](auto begin, auto end) {
-            return std::remove_if(begin, end, pred);
+            if constexpr (std::is_invocable_r_v<bool, Pred, typename cvector_t::size_type>)
+                return std::remove_if(begin, end, pred);
+            else if constexpr (std::is_invocable_r_v<bool, Pred, typename cvector_t::reference>) {
+                return std::remove_if(begin, end, [&](cvector_t::size_type index) -> bool {
+                    return std::invoke(pred, c[index]);
+                });
+            } else
+                static_assert(clz::false_v<>, 
+                    "Predicate must return bool and take either cvector<...>::size_type "
+                    "or cvector<...>::const_reference");
         }));
     }
 
@@ -4664,7 +4716,7 @@ auto named_def = overload {
 
 static_assert(clazz_info<type>::has_dec<dec _1<int>>);
 static_assert(clazz_info<type>::has_dec<dec _2<double>>);
-static_assert(clazz_info<type>::has_dec<dec _3<int>>);
+static_assert(clazz_info<type>::has_dec<dec _3<int, true>>);
 static_assert(clazz_info<type>::has_dec<dec _4<int() const, true>>);
 static_assert(clazz_info<type>::has_dec<dec _5<int(int) const, true>>);
 static_assert(clazz_info<type>::has_dec<dec _6<int(int) const>>);
@@ -4977,9 +5029,14 @@ int foo(int argc, char** argv) {
         return clazz_comparator<tag _3, tag _1, tag _2>::strong_less_than(l, r);   
     });
     std::cout << "removing where _1 is 20 or between 15 and 18 ...\n";
-    std::erase_if(soa, [_1 = soa.array<tag _1>()](auto i) {
-        return (_1[i] >= 15 && _1[i] <= 18) || _1[i] == 20;
+    std::erase_if(soa, [](Clazz i) {
+        return (i._1 >= 15 && i._1 <= 18) || i._1 == 20;
     });
+    // std::erase_if(soa, [_1 = soa->_1](size_t i) {
+    //     return (_1[i] >= 15 && _1[i] <= 18) || _1[i] == 20;
+    // });
+    std::cout << type_name_v<decltype(soa)::reference> << '\n';
+    std::cout << type_name_v<decltype(soa[0])> << '\n';
     // std::cout << "append1... \n";
     // soa.append(soa);
     // std::cout << "append2... \n";
