@@ -89,16 +89,16 @@ cout << n1.first_name << " " << n1.last_name << '\n'; // John Smith
 cout << n2.first_name << " " << n2.last_name << '\n'; // John Smith
 
 // Specify acceptable interface of clazz parameter inline
-void print1(const Implements<dec first_name<std::string>, dec last_name<std::string>> auto& person) {
+void print1(const clz::Clazz<dec first_name<std::string>, dec last_name<std::string>> auto& person) {
     cout << n1.last_name ", " << n1.first_name << '\n';
 }
 
 print1(n1); // Smith, John
 print1(n2); // Smith, John
 
-// Or specify a named trait
-using person = trait<dec first_name<std::string>, dec last_name<std::string>>;
-void print2(const ImplementsTrait<person> auto& person) {
+// Or reference a named trait to implement
+using person = clz::trait<dec first_name<std::string>, dec last_name<std::string>>;
+void print2(const clz::Clazz<person> auto& person) {
     print1(person);
 }
 
@@ -184,7 +184,7 @@ using ABC = clazz<var a<int>, var b<int>, var c<int>>;
 auto abc1 = ABC{args<tag a, tag b, tag c> = 42};
 
 // Unfortunately, deduction guides are not flexible enough to avoid a make_ helper when setting multiple arguments at once
-auto abc2 = make_clazz(args<tag a, tag b, tag c> = 42);
+auto abc2 = clz::make_clazz(args<tag a, tag b, tag c> = 42);
 
 // a, b, and c have all been set to 42
 assert(abc1 == ABC{42, 42, 42} && abc1 == abc2);
@@ -205,7 +205,7 @@ using ABC = clazz<var a<int, 7>, var b<int, 8>, var c<int, 9>>;
 
 auto get_abc(ABC abc) { return abc; }
 
-auto abc1 = make_clazz<tag a, tag b, tag c>(anon_abc); // {a: 0, b: 1, c: 2}
+auto abc1 = clz::make_clazz<tag a, tag b, tag c>(anon_abc); // {a: 0, b: 1, c: 2}
 auto abc2 = ABC{anon_abc}; // {a: 0, b: 1, c: 2}
 auto abc3 = get_abc(anon_ab); // {a: 0, b: 1, c: 9} c is missing from anon_ab, but default value of c in ABC is 9
 ```
@@ -219,9 +219,9 @@ assert(n1._1 == 2 && n1._2 == 5 && n1._3 == 8);
 // Conversions from tuple available:
 auto t = std::tuple{1, 2, 3}; // tuple<int, int, int> 
 auto n2 = nuple(t); // nuple<int, int, int> {_1: 1, _2: 2, _3: 3}
-auto& n3 = as_named_tuple<nuple>(tuple); // nuple<int, int, int>& via reinterpret_cast {_1: 1, _2: 2, _3: 3}
-auto& n4 = as_nuple(t); // nuple<int, int, int>& via reinterpret_cast {_1: 1, _2: 2, _3: 3}
-view_t<decltype(n2)> n5 = t // nuple<int&, int&, int&> {_1: &1, _2: &2, _3: &3}
+auto& n3 = clz::as_named_tuple<nuple>(tuple); // nuple<int, int, int>& via reinterpret_cast {_1: 1, _2: 2, _3: 3}
+auto& n4 = clz::as_nuple(t); // nuple<int, int, int>& via reinterpret_cast {_1: 1, _2: 2, _3: 3}
+clz::view_t<decltype(n2)> n5 = t // nuple<int&, int&, int&> {_1: &1, _2: &2, _3: &3}
 
 assert(n1 == n2 && n1 == n2 && n1 == n3 && n1 == n4 && n1 == n5); // All structurally equal
 
@@ -249,7 +249,7 @@ To order the data members in memory in:
 * std::tuple memory layout order, use ```clazz``` (for easy and unsurprising std::tuple interop)
 ```c++
 // Manually order fields to maximise space lost due to padding
-using bad_padding = clazz_decl <
+using bad_padding = clz::clazz_decl <
     var s1 <std::string>, // 32
     var c1 <char>,        // 1
     // clz::padding<7>,   // 7 (wasted)
@@ -267,7 +267,7 @@ using bad_padding = clazz_decl <
 static_assert(sizeof(bad_padding) == 160);
 
 // Manually order fields to minimise space lost due to padding
-using good_padding = clazz_decl <
+using good_padding = clz::clazz_decl <
     var c1 <char>,        // 1
     var c2 <char>,        // 1
     var c3 <char>,        // 1
@@ -282,15 +282,15 @@ using good_padding = clazz_decl <
 static_assert(sizeof(good_padding) == 136);
 
 // Using sort_asc on bad_padding results in good_padding
-static_assert(std::is_same_v<sort_asc<bad_padding>, good_padding>>);
+static_assert(std::is_same_v<clz::sort_asc<bad_padding>, good_padding>>);
 
 // Sorting in descending order also results in efficient packing
-static_assert(sizeof(sort_asc<bad_padding>) == sizeof(sort_desc<bad_padding>));
+static_assert(sizeof(clz::sort_asc<bad_padding>) == sizeof(clz::sort_desc<bad_padding>));
 ```
 ### 7. <a name="greatest-hits-hvector"></a>clz::hvector<>: Heterogeneous vector of clazzes implementing a trait
 Runtime polymorphism without vtables or std::visit (runtime polymorphism which can be inlined).
 ```c++
-using printable = trait<dec print<void() const>>;
+using printable = clz::trait<dec print<void() const>>;
 
 using position = clazz <
     var x <int>, 
@@ -302,7 +302,7 @@ using position = clazz <
 >;
 
 // clazz with data members sorted in ascending order of size to help packing (char) variant index in hvector
-using person = clazz_asc <
+using person = clz::clazz_asc <
     var name  <std::string>,
     var age   <int>,
     def print <void() const, [](auto& self) {
@@ -319,7 +319,7 @@ hvec.emplace_back<person>(arg name = "John Smith", arg age = 21); // Add {name: 
 
 // hvector uses minimal space required by packing the clazzes together
 static_assert(sizeof(position) == 12 && sizeof(person) == 40);
-assert(hvec.data_size() == 2 * 16 + 40); // 2 * {char,int,int,int} + {char,int,std::string}
+assert(hvec.size_bytes() == 2 * 16 + 40); // 2 * {char,int,int,int} + {char,int,std::string}
 // Uses 72 bytes vs 144, which is 3 * sizeof(std::variant<person,position>)
 
 // Call print(), which is declared in the printable trait, directly on element without ugly visitor syntax
@@ -391,8 +391,8 @@ persons.sort([](const auto& left, const auto& right) {
 });
 
 // Call defs on element type directly
-for (auto& person : persons)
-    person.print();
+for (auto& person_view : persons)
+    person_view.print();
 
 // Prints:
 // John Smith is 21 years old
@@ -417,7 +417,7 @@ assert(persons[offset] == person{"John Smith", 21});
 std::erase_if(persons, [&](size_t index) { return persons->age[index] > 21; });
 
 // Equivalently, the predicate could be for persons::reference
-// std::erase_if(persons, [&](Clazz auto person) { return person.age > 21; }); 
+// std::erase_if(persons, [](clz::Clazz auto person_view) { return person_view.age > 21; }); 
 
 for (auto& person : persons)
     person.print();
