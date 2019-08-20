@@ -310,17 +310,36 @@ constexpr inline const meta_clazz<Ts...>& meta_clazz_of(const clazz<Ts...>& clz)
 template<DataSymbol... X>
 using meta_pod = meta_clazz<X...>;
 
-template<class T>
-struct is_clazz : std::false_type{};
+namespace detail {
+    template<class T, class...>
+    struct is_clazz : std::false_type{};
 
-template<Symbol... Ts>
-struct is_clazz<clazz<Ts...>> : std::true_type {};
+    template<class... Ts>
+    struct is_clazz<clazz<Ts...>> : std::true_type {};
 
-template<class T>
-concept bool Clazz = is_clazz<std::decay_t<T>>::value;
+    template<class T>
+    concept bool IsClazz = is_clazz<T>::value;
+
+    template<class T, class U>
+    concept bool IsClazzWith = is_clazz<T, U>::value;
+}
+
+template<class T, class... Ts>
+concept bool Clazz = detail::IsClazz<std::decay_t<T>> && (detail::IsClazzWith<std::decay_t<T>, std::decay_t<Ts>> && ...);
 
 template<Clazz C>
 struct clazz_info : clazz_info<std::decay_t<C>> {};
+
+namespace detail {
+    template<Clazz C, Declaration D>
+    struct is_clazz<C, D> : std::bool_constant<clazz_info<C>::template implements<D>> {};
+
+    template<Clazz C, Symbol S>
+    struct is_clazz<C, S> : std::bool_constant<clazz_info<C>::template has_symbol<S>> {};
+
+    template<Clazz C, Tag T>
+    struct is_clazz<C, T> : std::bool_constant<clazz_info<C>::template has_name<T>> {};
+}
 
 template<class>
 struct is_tuple : std::false_type {};
@@ -367,15 +386,6 @@ concept bool MetaPod = MetaClazz<T> && std::decay_t<T>::is_pod;
 template<Clazz, Symbol...>
 struct struple;
 
-template<class T, class... Decs>
-concept bool Implements = Clazz<T> && clazz_info<T>::template implements<Decs...>;
-
-template<class T, class... Decs>
-concept bool CoImplements = Clazz<T> && clazz_info<T>::template co_implements<Decs...>;
-
-template<class T, class... Decs>
-concept bool ContraImplements = Clazz<T> && clazz_info<T>::template contra_implements<Decs...>;
-
 template<Declaration... Ds>
 struct trait {};
 
@@ -391,8 +401,45 @@ concept bool Trait = trait_info<std::decay_t<T>>::is_trait;
 template<class T>
 concept bool PureTrait = Trait<T> && trait_info<std::decay_t<T>>::pure;
 
-template<class C, class T>
-concept bool ImplementsTrait = Clazz<C> && Trait<T> && trait_info<std::decay_t<T>>::template co_implementor<std::decay_t<C>>;
+namespace detail {
+    template<Clazz C, Trait T>
+    struct is_clazz<C, T> : std::bool_constant<trait_info<T>::template implementor<C>> {};
+
+    template<Clazz C, class T>
+    struct implements : std::false_type {};
+    template<Clazz C, class T>
+    struct co_implements : std::false_type {};
+    template<Clazz C, class T>
+    struct contra_implements : std::false_type {};
+
+    template<Clazz C, Declaration D>
+    struct implements<C, D> : std::bool_constant<clazz_info<C>::template implements<D>> {};
+    template<Clazz C, Declaration D>
+    struct co_implements<C, D> : std::bool_constant<clazz_info<C>::template co_implements<D>> {};
+    template<Clazz C, Declaration D>
+    struct contra_implements<C, D> : std::bool_constant<clazz_info<C>::template contra_implements<D>> {};
+
+    template<Clazz C, Trait T>
+    struct implements<C, T> : std::bool_constant<trait_info<T>::template implementor<C>> {};
+    template<Clazz C, Trait T>
+    struct co_implements<C, T> : std::bool_constant<trait_info<T>::template co_implementor<C>> {};
+    template<Clazz C, Trait T>
+    struct contra_implements<C, T> : std::bool_constant<trait_info<T>::template contra_implementor<C>> {};
+
+    template<class C, class T>
+    concept bool Implements = implements<C, T>::value;
+    template<class C, class T>
+    concept bool CoImplements = co_implements<C, T>::value;
+    template<class C, class T>
+    concept bool ContraImplements = contra_implements<C, T>::value;
+}
+
+template<class C, class... T>
+concept bool Implements = (detail::Implements<C, T> && ...);
+template<class C, class... T>
+concept bool CoImplements = (detail::CoImplements<C, T> && ...);
+template<class C, class... T>
+concept bool ContraImplements = (detail::ContraImplements<C, T> && ...);
 
 template<Clazz SubClazz, Clazz SuperClazz>
 struct clazz_is_subclazz_of : std::false_type {};
@@ -1345,6 +1392,7 @@ namespace detail {
             static constexpr bool has_mem_var = detail::tag::concepts::tag_name::HasMemVar<Struct>;\
             template<class Struct>\
             using mem_var_t = var_t<typename class_data_member_pointer_info<decltype(&Struct::tag_name)>::member_t>;\
+            /*TODO: Avoid using offsetof*/\
             template<Clazz Top>\
             static constexpr size_t offset = __builtin_offsetof(Top, tag_name);\
         };\
@@ -1744,7 +1792,7 @@ struct symbol_queries : tag_queries<TagName>, dec_queries<Dec> {};
             template<class Test>\
             static constexpr bool has_compatible_field = false;\
             template<Clazz C, class... Ts>\
-            requires clazz_info<C>::template has_symbol<symbol_t>\
+            requires clazz_info<C>::template has_dec_of<symbol_t>\
             static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
                 return c.tag_name(std::forward<Ts...>(ins)...);\
             }\
@@ -1761,7 +1809,7 @@ struct symbol_queries : tag_queries<TagName>, dec_queries<Dec> {};
             template<class Test>\
             static constexpr bool has_compatible_field = false;\
             template<Clazz C, class... Ts>\
-            requires clazz_info<C>::template has_symbol<symbol_t>\
+            requires clazz_info<C>::template has_dec_of<symbol_t>\
             static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
                 return c.tag_name(std::forward<Ts...>(ins)...);\
             }\
@@ -1886,7 +1934,7 @@ struct symbol_queries : tag_queries<TagName>, dec_queries<Dec> {};
             template<class Test>\
             static constexpr bool has_compatible_field = false;\
             template<Clazz C, class... Ts>\
-            requires clazz_info<C>::template has_symbol<symbol_t>\
+            requires clazz_info<C>::template has_dec_of<symbol_t>\
             static constexpr decltype(auto) invoke(C&& c, Ts&&... ins) {\
                 return c.tag_name(std::forward<Ts...>(ins)...);\
             }\
@@ -1922,7 +1970,7 @@ struct padding {
     constexpr padding() {}
 private:
     struct {
-        char _[Size];
+        std::byte _[Size];
     };
 };
 
@@ -1958,7 +2006,7 @@ template<size_t Size>
 struct symbol_info<padding<Size>> {
     using value_t = void;
     static constexpr symbol_type type = symbol_type::padding;
-    using tuple_t = std::tuple<char[Size]>;
+    using tuple_t = std::tuple<std::byte[Size]>;
     using tag_t = detail::tag::padding<Size>;
     using symbol_t = padding<Size>;
     template<class>
@@ -2295,13 +2343,14 @@ struct clazz_info<clazz<X...>> {
 
     static constexpr size_t size = sizeof...(X);
 
+    // TODO: Avoid using offsetof
     static constexpr auto offsets() {
         return std::array{symbol_tag_info<X>::template offset<clazz_t>...};
         // return std::array{std::size_t(static_cast<symbol_element_t<clazz_t, X>*>(static_cast<clazz_t*>(nullptr))) - std::size_t(static_cast<clazz_t*>(nullptr))...};
     }
 
     template<Symbol S>
-    static constexpr bool has_symbol = (info<X>::template shares_dec<S> || ...);
+    static constexpr bool has_symbol = (std::is_same_v<info<S>, info<X>> || ...);
     
     template<class Struct>
     static constexpr bool importable = ((EmptySymbol<X> || symbol_tag_info<X>::template has_mem_var<std::decay_t<Struct>>) && ...);
@@ -3199,7 +3248,11 @@ struct trait_info<trait<Ds...>> {
     static constexpr bool pure = (MethodDeclaration<Ds> && ...);
 
     template<Clazz C>
+    static constexpr bool implementor = clazz_info<C>::template implements<Ds...>;
+    template<Clazz C>
     static constexpr bool co_implementor = clazz_info<C>::template co_implements<Ds...>;
+    template<Clazz C>
+    static constexpr bool contra_implementor = clazz_info<C>::template contra_implements<Ds...>;
 
     template<Clazz C>
     requires pure
@@ -3215,7 +3268,7 @@ struct trait_info<trait<Ds...>> {
     >;
 };
 
-template<PureTrait Trt, ImplementsTrait<Trt>... Variants>
+template<PureTrait Trt, CoImplements<Trt>... Variants>
 struct hvector {
     using size_type = unsigned int;
     using value_type = typename trait_info<Trt>::template variants_clazz_t<Variants...>;
@@ -3231,17 +3284,17 @@ private:
     std::vector<size_type> positions;
 
     struct freer {
-        void operator()(void* p) const { free(p); }
+        void operator()(void* p) const { std::free(p); }
     };
-    using buffer_t = std::unique_ptr<char, freer>;
+    using buffer_t = std::unique_ptr<std::byte, freer>;
     buffer_t buffer;
     size_type write_head = 0;
     size_type capacity = 0;
 
-    inline char* get_buffer() {
+    inline std::byte* get_buffer() {
         return std::assume_aligned<Align>(buffer.get());
     }
-    inline const char* get_buffer() const {
+    inline const std::byte* get_buffer() const {
         return std::assume_aligned<Align>(buffer.get());
     }
 
@@ -3253,7 +3306,7 @@ private:
 
     std::pair<buffer_t, size_type> _create_buffer(size_type size) {
         size = pad_to_align(size);
-        return {buffer_t((char*)aligned_alloc(Align, size)), size};
+        return {buffer_t((std::byte*)aligned_alloc(Align, size)), size};
     }
 
     void _replace_buffer(size_type size) {
@@ -3263,7 +3316,8 @@ private:
                 detail::visit_clazz_variant<void, variant_t<Variants>...>(
                     std::index_sequence_for<Variants...>{},
                     (const char&)i, &i,
-                    [&, i = (const char&)i, new_buffer = std::assume_aligned<Align>(new_buffer.get())]<class T>(T& self) {
+                    [&, i = (const std::byte&)i, new_buffer = std::assume_aligned<Align>(new_buffer.get())]
+                    <class T>(T& self) {
                         new_write_head = pad_to_align(new_write_head, alignof(T));
                         new (new_buffer + new_write_head) T(std::move(self));
                         new_buffer[new_write_head] = i;
@@ -3295,7 +3349,7 @@ public:
             _replace_buffer(2 * (write_head + value_size));
 
         new (get_buffer() + write_head) value_t(std::forward<Ts>(args)...);
-        get_buffer()[write_head] = index;
+        get_buffer()[write_head] = std::byte{index};
 
         write_head += value_size;
         return back();
@@ -3328,7 +3382,7 @@ public:
     size_type size() const noexcept {
         return positions.size();
     }
-    size_t data_size() const noexcept {
+    size_t size_bytes() const noexcept {
         return write_head;
     }
     bool empty() const noexcept {
@@ -3340,11 +3394,11 @@ public:
         // Destruct back element
         detail::visit_clazz_variant<void, variant_t<Variants>...>(
             std::index_sequence_for<Variants...>{},
-            back, &back, []<class T>(T& self) { self.~T(); });
+            (const char&)back, &back, []<class T>(T& self) { self.~T(); });
 
         // Remove position and truncate buffer
         positions.pop_back();
-        write_head = positions.back() + var_sizes[get_buffer()[positions.back()]];
+        write_head = positions.back() + var_sizes[static_cast<char>(get_buffer()[positions.back()])];
     }
 
 private:
@@ -3365,7 +3419,7 @@ private:
 
     public:
         auto& operator++() {
-            pos += var_sizes[underlying.get_buffer()[pos]];
+            pos += var_sizes[static_cast<char>(underlying.get_buffer()[pos])];
             return *this;
         }
         
@@ -3567,6 +3621,7 @@ private:
     static constexpr auto sizes = std::array{sizeof(symbol_value_t<X>)...};
     static constexpr auto aligns = std::array{std::max(Align, alignof(symbol_value_t<X>))...};
 
+    // First index used to store real capacity (instead of always being 0)
     using offsets_t = std::array<size_type, sizeof...(X)>;
 
     template<class T>
@@ -3584,7 +3639,7 @@ private:
     struct buffer_t {     
         buffer_t(size_type buffer_size) noexcept {
             constexpr auto align = std::max(alignof(T), Align);
-            ptr = (T*)aligned_alloc(align, pad_to_align(buffer_size, align));
+            ptr = (T*)std::aligned_alloc(align, pad_to_align(buffer_size, align));
         }
 
         buffer_t(buffer_t&& other) noexcept : ptr{other.ptr} {
@@ -3592,43 +3647,62 @@ private:
         }
 
         buffer_t& operator=(buffer_t&& other) noexcept {
-            free(ptr);
+            std::free(ptr);
             ptr = other.ptr;
             other.ptr = nullptr;
             return *this;
         }
 
-        auto get() noexcept { return _assume_aligned(ptr); }
-        auto get() const noexcept { return _assume_aligned(ptr); }
+        inline void swap(buffer_t& other) { std::swap(ptr, other.ptr); }
+        friend void swap(buffer_t& l, buffer_t& r) { l.swap(r); }
 
-        ~buffer_t() { free(ptr); }
+        auto get() noexcept { return _assume_aligned(ptr); }
+        auto get() const noexcept { return _assume_aligned((const T*)ptr); }
+
+        ~buffer_t() { std::free(ptr); }
     private:
         T* ptr;
     };
-    buffer_t<char> _buffer;
+    buffer_t<std::byte> _buffer;
     arrays_t _arrays;
 
-    static constexpr size_type min_size = std::max(size_type(4), std::min({(Align/sizeof(symbol_value_t<X>))...}));
-    static constexpr size_type default_capacity = std::max(min_size, size_type(12));
+    inline static constexpr size_type pad_to_align(size_type to_pad, size_type align = Align) {
+        return (to_pad + align - 1) & -align;
+    }
 
-    cvector_impl(const offsets_t& offsets, size_type capacity, size_type size)
-        : _capacity{capacity}
+    template<class T>
+    inline static constexpr size_type extra_capacity(size_type n) {
+        constexpr size_type size = sizeof(T);
+        constexpr size_type align = std::max(Align, alignof(T));
+        constexpr size_type res = size % align;
+        return ((-n*res) & (align - 1)) / size;
+    }
+
+    inline static constexpr size_type real_capacity(size_type capacity) {
+        return capacity + std::min({extra_capacity<symbol_value_t<X>>(capacity)...});
+    }
+
+    static constexpr size_type min_capacity = real_capacity(4);
+    static constexpr size_type default_capacity = std::max(min_capacity, real_capacity(12));
+
+    cvector_impl(const offsets_t& offsets, size_type size)
+        : _capacity{offsets[0]}
         , _size{size}
-        , _buffer{_create_buffer(offsets, capacity)}
+        , _buffer{_create_buffer(offsets)}
         , _arrays{_create_arrays(_buffer.get(), offsets)}
     {}
 
 public:
-    cvector_impl(size_type capacity = default_capacity) : cvector_impl{_create_offsets(capacity), capacity, 0} {}
+    cvector_impl(size_type capacity = default_capacity) : cvector_impl{_create_offsets(capacity), 0} {}
 
     cvector_impl(const cvector_impl& other) 
-        : cvector_impl(_create_offsets(2 * other._size), 2 * other._size, other._size)
+        : cvector_impl(_create_offsets(2 * other._size), other._size)
     {
         _for_each(other._buffer.get(), _capacity, [this]<class T>(T* __restrict our_buffer, T* __restrict other_buffer) {
             our_buffer = _assume_aligned(our_buffer);
             other_buffer = _assume_aligned(other_buffer);
 
-            for(size_t i = 0; i < _size; ++i) {
+            for (size_t i = 0; i < _size; ++i) {
                 new (our_buffer + i) T(other_buffer[i]);
             }
         });
@@ -3656,6 +3730,10 @@ public:
         }
     }
 
+    void reserve_extra(size_type n) {
+        reserve(_size + n);
+    }
+
     void resize(size_type n) {
         if (n > _capacity) {
             _resize_buffer(n);
@@ -3664,7 +3742,7 @@ public:
             _for_each([n, this]<class T>(T* array) {
                 if constexpr (!std::is_trivially_destructible_v<T>) {
                     array = _assume_aligned(array);
-                    for(size_type i = n; i < _size; ++i) {
+                    for (size_type i = n; i < _size; ++i) {
                         array[i].~T();
                     }
                 }
@@ -3673,7 +3751,7 @@ public:
         } else if (n > _size) {
             _for_each([n, this]<class T>(T* array) {
                 array = _assume_aligned(array);
-                for(size_type i = n; i < _size; ++i) {
+                for (size_type i = n; i < _size; ++i) {
                     new (array + i) T();
                 }
             });
@@ -3682,7 +3760,7 @@ public:
 
     void shrink_to_fit() {
         if (_size < _capacity) {
-            _resize_buffer(std::max(_size, min_size));
+            _resize_buffer(std::max(_size, min_capacity));
         }
     }
 
@@ -3700,7 +3778,7 @@ private:
             old_buffer = _assume_aligned(old_buffer);
             new_buffer = _assume_aligned(new_buffer);
 
-            for (size_t i = 0; i < _size; ++i) {
+            for (size_type i = 0; i < _size; ++i) {
                 new (new_buffer + i) T(std::move(old_buffer[i]));
                 old_buffer[i].~T();
             }
@@ -3710,23 +3788,19 @@ private:
     template<class F>
     void _map_to_new_buffer(size_type capacity, F&& f) {
         auto offsets = _create_offsets(capacity);
-        auto new_buffer = _create_buffer(offsets, capacity);
+        auto new_buffer = _create_buffer(offsets);
 
         if (!empty()) {
             _for_each(new_buffer.get(), offsets, std::forward<F>(f));
         }
 
-        _buffer = std::move(new_buffer);
+        _buffer.swap(new_buffer);
         _arrays = _create_arrays(_buffer.get(), offsets);
-        _capacity = capacity;
-    }
-
-    inline static constexpr size_type pad_to_align(size_type to_pad, size_type align = Align) {
-        return (to_pad + (align - 1)) & -align;
+        _capacity = offsets[0];
     }
 
     constexpr offsets_t _create_offsets(size_type capacity) {
-        offsets_t offsets = {0};
+        offsets_t offsets = {real_capacity(capacity)};
         size_type offset = 0;
         for (size_type i = 1; i < sizeof...(X); ++i) {
             offset += capacity * sizes[i-1];
@@ -3736,17 +3810,21 @@ private:
         return offsets;
     }
 
-    static buffer_t<char> _create_buffer(const offsets_t& offsets, size_type capacity) {
-        size_type size = offsets.back() + capacity * sizes.back();
-        return buffer_t<char>(size);
+    static buffer_t<std::byte> _create_buffer(const offsets_t& offsets) {
+        if constexpr (sizeof...(X) > 1) {
+            size_type size = offsets.back() + offsets[0] * sizes.back();
+            return buffer_t<std::byte>(size);
+        } else {
+            return buffer_t<std::byte>(offsets[0] * sizes[0]);
+        }
     }
 
-    auto _create_arrays(char* buffer, const offsets_t& offsets) {
+    auto _create_arrays(std::byte* buffer, const offsets_t& offsets) {
         return _create_arrays(std::index_sequence_for<X...>{}, buffer, offsets);
     }
 
     template<size_t... I>
-    auto _create_arrays(std::index_sequence<I...>, char* buffer, const offsets_t& offsets) {
+    auto _create_arrays(std::index_sequence<I...>, std::byte* buffer, const offsets_t& offsets) {
         return arrays_t{_get_array<I>(buffer, offsets)...};
     }
 
@@ -3759,11 +3837,11 @@ private:
         (std::invoke(std::forward<F>(f), _get_array<I>()), ...);
     }  
     template<class F>
-    void _for_each(char* other_buffer, const offsets_t& other_offsets, F&& f) {
+    void _for_each(std::byte* other_buffer, const offsets_t& other_offsets, F&& f) {
         _for_each(std::index_sequence_for<X...>{}, other_buffer, other_offsets, std::forward<F>(f));
     }
     template<size_t... I, class F>
-    void _for_each(std::index_sequence<I...>, char* other_buffer, const offsets_t& other_offsets, F&& f) {
+    void _for_each(std::index_sequence<I...>, std::byte* other_buffer, const offsets_t& other_offsets, F&& f) {
         (std::invoke(std::forward<F>(f), _get_array<I>(), _get_array<I>(other_buffer, other_offsets)), ...);
     }
     template<class F>
@@ -3802,16 +3880,22 @@ private:
         return _assume_aligned(get<I>(_arrays));
     }
     template<size_t I>
-    inline decltype(auto) _get_array(char* buffer, const offsets_t& offsets) {
-        return _assume_aligned(reinterpret_cast<value_t<I>*>(buffer + offsets[I]));
+    inline decltype(auto) _get_array(std::byte* buffer, const offsets_t& offsets) {
+        if constexpr (I > 0)
+            return _assume_aligned(reinterpret_cast<value_t<I>*>(buffer + offsets[I]));
+        else 
+            return _assume_aligned(reinterpret_cast<value_t<I>*>(buffer));
     }
     template<size_t I>
     const decltype(auto) _get_array() const {
         return _assume_aligned(get<I>(_arrays));
     }
     template<size_t I>
-    const decltype(auto) _get_array(char* buffer, const offsets_t& offsets) const {
-        return _assume_aligned(reinterpret_cast<const value_t<I>*>(buffer + offsets[I]));
+    const decltype(auto) _get_array(std::byte* buffer, const offsets_t& offsets) const {
+        if constexpr (I > 0)
+            return _assume_aligned(reinterpret_cast<value_t<I>*>(buffer + offsets[I]));
+        else 
+            return _assume_aligned(reinterpret_cast<value_t<I>*>(buffer));
     }
 
 public:
@@ -4011,7 +4095,8 @@ public:
             return reference{array[pos]...};
         });
     }
-    const_reference operator[](size_type pos) const {
+    const_reference operator[](size_type pos) const 
+    {
         return _apply_arrays([=](auto*... array) {
             return const_reference{array[pos]...};
         });
@@ -4668,7 +4753,7 @@ using type = meta_pod <
         }
     >,
     def _6 <int(int) const,
-        [](Implements<dec _1<int>>& clz, int x) {
+        [](Clazz<tag _1>& clz, int x) {
             return x + clz._1*100'000;
         }
     >,
@@ -4962,6 +5047,16 @@ int foo(int argc, char** argv) {
     >;
     cvector<soa_el> soa;
 
+    using real_cap_test = cvector<clazz<
+        var _1<char>,
+        var _2<char>
+    >>;
+
+    real_cap_test captest;
+    std::cout << "captest capacity is: " << captest.capacity() << '\n';
+    captest.reserve(65);
+    std::cout << "captest capacity is: " << captest.capacity() << '\n';
+
     std::cout << type_name_v<decltype(soa.data())> << '\n';
 
     std::cout << "push (3,no)...\n";
@@ -5050,7 +5145,7 @@ int foo(int argc, char** argv) {
     // }, arg _3 = [&](size_t i) {
     //     return soa[i]._3;
     // }});
-    for(auto& el : soa) {
+    for (auto& el : soa) {
         soa_count += el._1 + el._2.length();
         el.print();
     }
@@ -5105,7 +5200,7 @@ int foo(int argc, char** argv) {
     pv.emplace_back<var2>(arg _1 = 1, arg _2 = 20, arg _3 = 300, arg _4 = 4000, arg _5 = 50000);
     pv.reserve(200);
     int countv = 0;
-    for(auto& i : pv) {
+    for (auto& i : pv) {
         countv += i._10();
     }
     std::cout << "countv is " << countv << '\n';
