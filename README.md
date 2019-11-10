@@ -18,7 +18,7 @@ There are some features in C++ which are the building blocks of structural progr
 The future is here. Get out of economy and into first clazz. You still have to do some work, but you get a bunch of stuff for free, like universally objective strict total ordering between all conceivable clazzes. And nuples.
 
 # Supported compilers
-At the moment, only GCC 9.1+ with "-std=c++2a -fconcepts". More compilers will be compatible once they catch up to the C++2a standard, which still needs to be finalised.
+At the moment, only GCC trunk with "-std=c++2a". More compilers will be compatible once they catch up to the C++2a standard, which still needs to be finalised.
 
 # Getting started
 
@@ -42,7 +42,7 @@ using ABC = clz::clazz <
 >;
 ```
 
-If you find the fully qualified namespaces ugly and distracting, and want to use the more readable keywords {clazz, nuple, var, val, tag, arg, args, dec, def, fun, ovl, tpe}, you can use the following technique to temporarily import keyword macros, which replace ```::clz::keyword::``` with ```keyword```. This greatly reduces smelly colon-induced noise (nobody likes a party-pooper):
+If you find the fully qualified namespaces ugly and distracting, and want to use the more readable keywords {clazz, nuple, var, val, tag, mut, arg, args, dec, def, fun, ovl, tpe}, you can use the following technique to temporarily import keyword macros, which replace ```::clz::keyword::``` with ```keyword```. This greatly reduces smelly colon-induced noise (nobody likes a party-pooper):
 
 ```c++
 // Somewhere at the top of your file
@@ -59,11 +59,12 @@ using ABC = clazz <
 ```
 
 # To do
-- [ ] Hash for any clazz (waiting on GCC to add more constexpr support approved for C++2a)
-- [ ] De/serialisation - haven't got around to implementing it yet
-- [ ] Making this a library - it's still just a sequence of (functioning) brain farts in a main.cpp demo file
+- [ ] Install a proper IDE, and stop just using Godbolt. The lack of project structure is getting unwieldy.
+- [x] Hash for any clazz (waiting on GCC to add more constexpr support approved for C++2a)
+- [x] Binary de/serialisation 
+- [ ] Check serialisation is working for all common types
 - [ ] Use modules for symbols instead of headers to reduce compile-time cost of symbols
-- [ ] Use a friendlier license when this library becomes usable
+- [ ] Use a friendlier license when this becomes usable as a library
 
 # Greatest hits
 1. [clz::clazz<>: Inline class definitions](#greatest-hits-inline-definitions)
@@ -72,8 +73,11 @@ using ABC = clazz <
 4. [Interop with existing vanilla classes, structural extraction of fields by name](#greatest-hits-interop)
 5. [clz::nuple<>: Named tuples, interop with existing std::tuple, structured bindings](#greatest-hits-nuple)
 6. [clz::sort_asc<>: Sort data members by size to minimise padding](#greatest-hits-sort-mem)
-7. [clz::hvector<>: Heterogeneous vector of clazzes implementing a trait](#greatest-hits-hvector)
-8. [clz::cvector<>: First clazz SoA - column-wise vector that is as easy to use as a vector of structs](#greatest-hits-cvector)
+7. [def: Powerful member function overloading](#greatest-hits-def)
+8. [clz::hvector<>: Heterogeneous vector of clazzes implementing a trait](#greatest-hits-hvector)
+9. [clz::cvector<>: First clazz SoA - column-wise vector that is as easy to use as a vector of structs](#greatest-hits-cvector)
+10. [clz::hash(): Constexpr hash for any clazz](#greatest-hits-hash)
+11. [clz::ser(): Free binary de/serialisation available for all clazzes](#greatest-hits-serialisation)
 
 ### 1. <a name="greatest-hits-inline-definitions"></a>clz::clazz<>: Inline class definitions
 Use a clazz directly, without having defined a name for it.
@@ -287,7 +291,56 @@ static_assert(std::is_same_v<clz::sort_asc<bad_padding>, good_padding>>);
 // Sorting in descending order also results in efficient packing
 static_assert(sizeof(clz::sort_asc<bad_padding>) == sizeof(clz::sort_desc<bad_padding>));
 ```
-### 7. <a name="greatest-hits-hvector"></a>clz::hvector<>: Heterogeneous vector of clazzes implementing a trait
+### 7. <a name="greatest-hits-def"></a>def: Powerful member function overloading
+Rather than having to specify multiple overloads with identical names and signatures for different calling contexts, the context of the call can be inferred from first parameter of each clazz def.
+
+This makes it much easier to program generically, since you can open up your function to multiple call scenarios, while still inferring under which context the call was made. You can modify the return type based on the calling context from within the same definition. How cool is that?
+
+If you really want to restrict to the classic C++ calling contexts, these would be the clazz def equivalents:
+
+|vanilla C++                        | clazz                                      |
+|-----------------------------------|--------------------------------------------|
+|```c++void run()          {...}``` | ```def run<[](auto&&       self) {...}>``` |
+|```c++void run() const    {...}``` | ```def run<[](const auto&& self) {...}>``` |
+|```c++void run() &        {...}``` | ```def run<[](mut   auto&  self) {...}>``` |
+|```c++void run() const &  {...}``` | ```def run<[](const auto&  self) {...}>``` |
+|```c++void run() &&       {...}``` | ```def run<[](rmut  auto&& self) {...}>``` |
+|```c++void run() const && {...}``` | ```def run<[](const auto&& self) {...}>``` |
+
+But of course, the standard function definitions are limited, and you end up repeating yourself when you want to specify a mix of the above. Here is an example of the power of clazz defs:
+```c++
++--------------------------------------------+--------------------------------------------------------+
+| vanilla C++ function definitions           | clazz defs                                             |
++--------------------------------------------+--------------------------------------------------------+
+| struct PersonBuilder {                     | using PersonBuilder = clazz <                          |
+|     std::string        name;               |     var name <std::string>,                            |
+|     std::optional<int> age = std::nullopt; |     var age  <std::optional<int>, std::nullopt>,       |
+|                                            |                                                        |
+|     auto& with_age(int age_) & {           |     def with_age<[]<mut T>(T&& self, int age) -> T&& { |
+|         age = age_;                        |         self.age = age;                                |
+|         return *this;                      |         return std::forward<T>(self);                  |
+|     }                                      |     }>,                                                |
+|     auto&& with_age(int age_) && {         |                                                        |
+|         age = age_;                        |     def get_age<[](auto& self) -> auto& {              |
+|         return std::move(*this);           |         return self.age.value();                       |
+|     }                                      |     }, [](rval auto&& self) -> auto&& {                |
+|                                            |         return std::move(self.age).value();            |
+|     const auto& get_age() const & {        |     }>,                                                |
+|         return age.value();                | >;                                                     |
+|     }                                      |                                                        |
+|     auto& () & {                           |                                                        |
+|         return age.value();                |                                                        |
+|     }                                      |                                                        |
+|     auto&& get_age() && {                  |                                                        |
+|         return std::move(age).value();     |                                                        |
+|     }                                      |                                                        |
+|     const auto&& get_age() const && {      |                                                        |
+|         return std::move(age).value();     |                                                        |
+|     }                                      |                                                        |
+| };                                         |                                                        |
++--------------------------------------------+--------------------------------------------------------+
+```
+### 8. <a name="greatest-hits-hvector"></a>clz::hvector<>: Heterogeneous vector of clazzes implementing a trait
 Runtime polymorphism without vtables or std::visit (runtime polymorphism which can be inlined).
 ```c++
 using printable = clz::trait<dec print<void() const>>;
@@ -296,7 +349,7 @@ using position = clazz <
     var x <int>, 
     var y <int>, 
     var z <int>, 
-    def print <void() const, [](auto& self) { 
+    def print <[](auto& self) { // Adheres to trait print declaration without specifically declaring type signature
         cout << '(' << self.x << ',' << self.y << ',' << self.z << ")\n"; 
     }>
 >;
@@ -305,7 +358,7 @@ using position = clazz <
 using person = clz::clazz_asc <
     var name  <std::string>,
     var age   <int>,
-    def print <void() const, [](auto& self) {
+    def print <[](auto& self) { // Adheres to trait print declaration without specifically declaring type signature
         cout << self.name << " aged " << self.age << '\n';
     }>
 >;
@@ -331,7 +384,7 @@ for (const auto& element : hvec)
 // (3,2,1)
 // John Smith aged 21
 ```
-### 8. <a name="greatest-hits-cvector"></a>clz::cvector<>: First clazz SoA (column-wise vector that is as easy to use as a vector of structs)
+### 9. <a name="greatest-hits-cvector"></a>clz::cvector<>: First clazz SoA (column-wise vector that is as easy to use as a vector of structs)
 Create a "vector of clazzes", with the memory arranged column-wise contiguously in memory. 
 * The beginning of each field array is aligned to a cache-line by default (64 bytes)
 * Only one memory allocation per resize.
@@ -341,7 +394,7 @@ Create a "vector of clazzes", with the memory arranged column-wise contiguously 
 using person = clazz <
     var name  <std::string>,
     var age   <int>,
-    def print <void() const, [](auto& self) {
+    def print <[](auto& self) {
         std::cout << self.name << " is " << self.age << " years old\n";
     }>
 >;
@@ -370,11 +423,12 @@ persons.reserve(20);
 // sorting order is found without ever needing to query the age column.
 persons.sort();
 
-for (auto& person_view : persons) {
+for (auto person_view : persons) {
     std::cout << person_view.name << " is " << person_view.age << " years old\n";
     // Each element is a view of a person, with each field in the view being a reference to 
     // the respective element on each column in the SoA
-    static_assert(std::is_same_v<view_t<person>&, decltype(person_view)>);
+    // Always iterate by value, as the compiler can optimise away the unused fields for temporary objects
+    static_assert(std::is_same_v<view_t<person>, decltype(person_view)>);
 }
 
 // Prints:
@@ -386,12 +440,12 @@ for (auto& person_view : persons) {
 // In this particular case, the name column is only accessed when names for
 // the respective elements are moved into their final position, since the
 // sorting order is found without ever needing to query the name column.
-persons.sort([](const auto& left, const auto& right) {
+persons.sort([](auto left, auto right) {
     return left.age < right.age;
 });
 
 // Call defs on element type directly
-for (auto& person_view : persons)
+for (auto person_view : persons)
     person_view.print();
 
 // Prints:
@@ -416,12 +470,112 @@ assert(persons[offset] == person{"John Smith", 21});
 // Efficient column-wise removal of elements with specialisation of std::erase_if
 std::erase_if(persons, [&](size_t index) { return persons->age[index] > 21; });
 
-// Equivalently, the predicate could be for persons::reference
+// Equivalently, the predicate could be for persons::reference. 
 // std::erase_if(persons, [](clz::Clazz auto person_view) { return person_view.age > 21; }); 
 
-for (auto& person : persons)
+for (auto person_view : persons)
     person.print();
 
 // Prints:
 // John Smith is 21 years old
+```
+### 10. <a name="greatest-hits-hash"></a>clz::hash(): Constexpr hash for any clazz
+The hash for a clazz hashes:
+1. All field names in alphabetical order (constexpr)
+2. All field type names in order of field name (constexpr)
+3. All field values in order of field name (constexpr for trivial types and all types convertible to std::string_view)
+```c++
+// All field values affect hash
+// {(int)a: 0} != {(int)a: 1}
+static_assert(hash(clazz{arg a = 0}) != hash(clazz{arg a = 1}));
+
+// All field types affect hash
+// {(int)a: 0} != {(double)a: 0}
+static_assert(hash(clazz{arg a = 0}) != hash(clazz{arg a = 0.0}));
+
+// All field names affect hash
+// {(int)a: 0} != {(int)b: 0}
+static_assert(hash(clazz{arg a = 0}) != hash(clazz{arg b = 0}));
+
+// Field order does not affect hash
+// {(int)a: 0, (int)b: 0} == {(int)b: 0, (int)a: 0}
+static_assert(hash(clazz{arg a = 0, arg b = 0}) == hash(clazz{arg b = 0, arg a = 0}));
+
+// Every clazz has a clazz id, that hashes everything but the values of an instance
+using AB = clazz<var a<int>, var b<double>>;
+using AC = clazz<var a<int>, var c<double>>; 
+using BA = clazz<var b<double>, var a<int>>;
+
+static_assert(clazz_id<AB> != clazz_id<ABC>);
+
+// Field order does not affect clazz_id
+static_assert(clazz_id<AB> == clazz_id<BA>);
+```
+### 11. <a name="greatest-hits-serialisation"></a>clz::ser(): Free binary de/serialisation available for all clazzes
+Any tree structured clazz can be serialised into a byte array and back without any boilerplate.
+
+At the moment, only the current types are supported:
+* Any primitive type (long, double, int, etc)
+* std::string
+* clazz with fields of any of the above
+* std::array/std::vector of any of the above
+
+```c++
+auto stuff = clazz {
+    arg _1 = 42, 
+    arg _2 = 22.0/7.0, 
+    arg _3 = clazz {
+        arg x = "hey"s,
+        arg y = std::vector{"how"s, "you"s, "doin"s},
+        arg z = std::array {
+            clazz {
+                arg x = 1,
+                arg y = 2,
+                arg z = 1.0/2.0
+            },
+            clazz {
+                arg x = 3,
+                arg y = 4,
+                arg z = 3.0/4.0
+            }
+        }
+    }
+};
+
+using stuff_t = std::decay_t<decltype(stuff)>;
+
+// Serialise stuff into a buffer
+auto buffer = ser(stuff);
+
+std::cout << to_string(stuff) << '\n'
+          << "clazz size: " << sizeof(stuff) << '\n'
+          << "buffer size: " << buffer.size() << '\n'
+          << buffer << '\n';
+          
+// Prints:
+// {_1: 42, _2: 3.14286, _3: {x: hey, y: [how, you, doin], z: [{x: 1, y: 2, z: 0.5}, {x: 3, y: 4, z: 0.75}]}}
+// clazz size: 104
+// buffer size: 94
+// _1,_2,_3.F*I�$I�$	@x,y,z.,heyhowyoudoinx,y,z.�?�?
+
+// Can regenerate the same data with the buffer, even though the requested type will have the field in a different order
+auto stuff_copy = deser<sort_desc<stuff_t>>(buffer.c_str());
+assert(stuff == stuff_copy);
+
+// Construct a type that has a subset of the values, also in a different order
+auto less_stuff = clazz { 
+    arg _3 = clazz {
+        arg z = std::array {
+            clazz{arg z = 1.0/2.0}, 
+            clazz{arg z = 3.0/4.0}
+        }
+    },
+    arg _1 = 42
+};
+
+using sub_t = std::decay_t<decltype(less_stuff)>;
+
+// Can construct any sub-type from the original serialised data
+auto deser_sub_from_full = deser<sub_t>(buffer.c_str());
+assert(less_stuff == deser_sub_from_full);
 ```
