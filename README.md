@@ -298,14 +298,14 @@ This makes it much easier to program generically, since you can open up your fun
 
 If you really want to restrict to the classic C++ calling contexts, these would be the clazz def equivalents:
 
-|vanilla C++                        | clazz                                      |
-|-----------------------------------|--------------------------------------------|
-|```c++void run()          {...}``` | ```def run<[](auto&&       self) {...}>``` |
-|```c++void run() const    {...}``` | ```def run<[](const auto&& self) {...}>``` |
-|```c++void run() &        {...}``` | ```def run<[](mut   auto&  self) {...}>``` |
-|```c++void run() const &  {...}``` | ```def run<[](const auto&  self) {...}>``` |
-|```c++void run() &&       {...}``` | ```def run<[](rmut  auto&& self) {...}>``` |
-|```c++void run() const && {...}``` | ```def run<[](const auto&& self) {...}>``` |
+|vanilla C++                     | clazz                                      |
+|--------------------------------|--------------------------------------------|
+|```void run()          {...}``` | ```def run<[](auto&&       self) {...}>``` |
+|```void run() const    {...}``` | ```def run<[](const auto&& self) {...}>``` |
+|```void run() &        {...}``` | ```def run<[](mut   auto&  self) {...}>``` |
+|```void run() const &  {...}``` | ```def run<[](const auto&  self) {...}>``` |
+|```void run() &&       {...}``` | ```def run<[](rmut  auto&& self) {...}>``` |
+|```void run() const && {...}``` | ```def run<[](const auto&& self) {...}>``` |
 
 But of course, the standard function definitions are limited, and you end up repeating yourself when you want to specify a mix of the above. Here is an example of the power of clazz defs:
 ```c++
