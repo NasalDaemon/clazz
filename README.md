@@ -42,7 +42,7 @@ using ABC = clz::clazz <
 >;
 ```
 
-If you find the fully qualified namespaces ugly and distracting, and want to use the more readable keywords {clazz, nuple, var, val, tag, mut, arg, args, dec, def, fun, ovl, tpe}, you can use the following technique to temporarily import keyword macros, which replace ```::clz::keyword::``` with ```keyword```. This greatly reduces smelly colon-induced noise (nobody likes a party-pooper):
+If you find the fully qualified namespaces ugly and distracting, and want to use the more readable keywords {clazz, nuple, var, val, tag, mut, let, args, dec, def, fun, ovl, tpe}, you can use the following technique to temporarily import keyword macros, which replace ```::clz::keyword::``` with ```keyword```. This greatly reduces smelly colon-induced noise (nobody likes a party-pooper):
 
 ```c++
 // Somewhere at the top of your file
@@ -87,7 +87,7 @@ clazz<var first_name<std::string>, var last_name<std::string>> name() {
 }
 
 auto n1 = name();
-auto n2 = clazz{arg last_name = "Smith"s, arg first_name = "John"s};
+auto n2 = clazz{let last_name = "Smith"s, let first_name = "John"s};
 
 cout << n1.first_name << " " << n1.last_name << '\n'; // John Smith
 cout << n2.first_name << " " << n2.last_name << '\n'; // John Smith
@@ -147,8 +147,8 @@ assert(A{1} < C{1}); // No shared fields, but field names a < c
 Clazzes can be constructed by their field names in any order.
 ```c++
 // Using deduction guides
-auto amount1 = clazz{arg amount = 1, arg currency = "GBP"sv}; // {amount: 1, currency: "GBP"}
-auto amount2 = clazz{arg currency = "GBP"sv, arg amount = 1}; // {currency: "GBP", amount: 1}
+auto amount1 = clazz{let amount = 1, let currency = "GBP"sv}; // {amount: 1, currency: "GBP"}
+auto amount2 = clazz{let currency = "GBP"sv, let amount = 1}; // {currency: "GBP", amount: 1}
 
 // Named clazz with default values
 using amount_t = clazz <
@@ -157,10 +157,10 @@ using amount_t = clazz <
 >;
 
 auto amount3 = amount_t(); // {amount: 1, currency: "GBP"}
-auto amount4 = amount_t(arg amount = 1); // {amount: 1, currency: "GBP"}
-auto amount5 = amount_t(arg currency = "GBP"); // {amount: 1, currency: "GBP"}
+auto amount4 = amount_t(let amount = 1); // {amount: 1, currency: "GBP"}
+auto amount5 = amount_t(let currency = "GBP"); // {amount: 1, currency: "GBP"}
 // Reverse order works too!
-auto amount6 = amount_t(arg currency = "GBP", arg amount = 1); // {amount: 1, currency: "GBP"}
+auto amount6 = amount_t(let currency = "GBP", let amount = 1); // {amount: 1, currency: "GBP"}
 auto amount7 = amount_t(1, "GBP"); // {amount: 1, currency: "GBP"}
 
 auto get_amount(amount_t amount) {
@@ -169,9 +169,9 @@ auto get_amount(amount_t amount) {
 
 auto amountGBP = get_amount({}); // {amount: 1, currency: "GBP"}
 // Set currency with multiple parameter constructor of std::string
-auto amountYYY = get_amount({arg currency(3, 'Y')}); // {amount: 1, currency: "YYY"} type of currency inferred as string
+auto amountYYY = get_amount({let currency(3, 'Y')}); // {amount: 1, currency: "YYY"} type of currency inferred as string
 // Set currency of inline unnamed clazz with multiple parameter constructor of std::string
-auto currencyHHH = clazz{arg currency.as<std::string>(3, 'H')}; // {currency: "HHH"} must explicitly name type to construct
+auto currencyHHH = clazz{let currency.as<std::string>(3, 'H')}; // {currency: "HHH"} must explicitly name type to construct
 auto amountHHH = get_amount(currencyHHH); // {currency: "HHH"} converted to {amount: 1, currency: "HHH"}
 
 // Amounts 1-7 are structurally equal, even though field order and types do not match
@@ -368,7 +368,7 @@ auto hvec = clz::hvector<printable, position, person>();
 //                       ^ trait    ^ option1 ^ option2 ...
 hvec.emplace_back<position>(0, 0, 0); // Add {x: 0, y: 0, z: 0}
 hvec.emplace_back<position>(3, 2, 1); // Add {x: 3, y: 2, z: 1}
-hvec.emplace_back<person>(arg name = "John Smith", arg age = 21); // Add {name: "John Smith", age: 21}
+hvec.emplace_back<person>(let name = "John Smith", let age = 21); // Add {name: "John Smith", age: 21}
 
 // hvector uses minimal space required by packing the clazzes together
 static_assert(sizeof(position) == 12 && sizeof(person) == 40);
@@ -408,7 +408,7 @@ auto persons = clz::cvector<person>(); // Similar memory structure to: clazz <
 // Add some elements to the SoA
 persons.push_back("John Smith", 21); // Construct and move in place
 persons.emplace_back("John Doe", 22); // Construct in place
-persons.emplace_back(arg age = 23, arg name = "Joe Moe"); // Construct in place with designated initialiser
+persons.emplace_back(let age = 23, let name = "Joe Moe"); // Construct in place with designated initialiser
 
 // Creates one block of memory in one memory allocation for use by all fields,
 // with elements to be arranged in column-wise order in the memory block.
@@ -487,19 +487,19 @@ The hash for a clazz hashes:
 ```c++
 // All field values affect hash
 // {(int)a: 0} != {(int)a: 1}
-static_assert(hash(clazz{arg a = 0}) != hash(clazz{arg a = 1}));
+static_assert(hash(clazz{let a = 0}) != hash(clazz{let a = 1}));
 
 // All field types affect hash
 // {(int)a: 0} != {(double)a: 0}
-static_assert(hash(clazz{arg a = 0}) != hash(clazz{arg a = 0.0}));
+static_assert(hash(clazz{let a = 0}) != hash(clazz{let a = 0.0}));
 
 // All field names affect hash
 // {(int)a: 0} != {(int)b: 0}
-static_assert(hash(clazz{arg a = 0}) != hash(clazz{arg b = 0}));
+static_assert(hash(clazz{let a = 0}) != hash(clazz{let b = 0}));
 
 // Field order does not affect hash
 // {(int)a: 0, (int)b: 0} == {(int)b: 0, (int)a: 0}
-static_assert(hash(clazz{arg a = 0, arg b = 0}) == hash(clazz{arg b = 0, arg a = 0}));
+static_assert(hash(clazz{let a = 0, let b = 0}) == hash(clazz{let b = 0, let a = 0}));
 
 // Every clazz has a clazz id, that hashes everything but the values of an instance
 using AB = clazz<var a<int>, var b<double>>;
@@ -517,65 +517,94 @@ Any tree structured clazz can be serialised into a byte array and back without a
 At the moment, only the current types are supported:
 * Any primitive type (long, double, int, etc)
 * std::string
-* clazz with fields of any of the above
-* std::array/std::vector of any of the above
+* clazz with fields of any type on this list
+* cvector of clazz with fields of any type on this list
+* std::array/std::vector of any type on this list
 
 ```c++
 auto stuff = clazz {
-    arg _1 = 42, 
-    arg _2 = 22.0/7.0, 
-    arg _3 = clazz {
-        arg x = "hey"s,
-        arg y = std::vector{"how"s, "you"s, "doin"s},
-        arg z = std::array {
+    let _1 = 42, 
+    let _2 = 22.0/7.0, 
+    let _3 = clazz {
+        let a = "hey"s,
+        let b = std::vector{"how"s, "you"s, "doin"s},
+        let c = std::array {
             clazz {
-                arg x = 1,
-                arg y = 2,
-                arg z = 1.0/2.0
+                let x = 1,
+                let y = 2,
+                let z = 1.0/2.0
             },
             clazz {
-                arg x = 3,
-                arg y = 4,
-                arg z = 3.0/4.0
+                let x = 3,
+                let y = 4,
+                let z = 3.0/4.0
             }
         }
-    }
+    },
+    let _4.be([] {
+        clz::cvector<clazz<var _1<double>, var _2<std::string>>> cvec(3);
+        cvec.append(3, clazz {
+            let _1 = [](size_t i) { return i/2.0; },
+            let _2 = [](size_t i) { return std::to_string(i); }
+        });
+        return cvec;
+    })
 };
 
-using stuff_t = std::decay_t<decltype(stuff)>;
-
-// Serialise stuff into a buffer
+// Serialise stuff into a binary buffer
 auto buffer = ser(stuff);
 
-std::cout << to_string(stuff) << '\n'
+std::cout << stuff << '\n'
           << "clazz size: " << sizeof(stuff) << '\n'
           << "buffer size: " << buffer.size() << '\n'
           << buffer << '\n';
           
 // Prints:
-// {_1: 42, _2: 3.14286, _3: {x: hey, y: [how, you, doin], z: [{x: 1, y: 2, z: 0.5}, {x: 3, y: 4, z: 0.75}]}}
-// clazz size: 104
-// buffer size: 94
-// _1,_2,_3.F*I�$I�$	@x,y,z.,heyhowyoudoinx,y,z.�?�?
+// {_1: 42, _2: 3.14286, _3: {x: hey, y: [how, you, doin], z: [{a: 1, b: 2, c: 0.5}, {a: 3, b: 4, c: 0.75}]},
+// ..^ _4: [{_1: 0, _2: 0}, {_1: 0.5, _2: 1}, {_1: 1, _2: 2}]}
+// clazz size: 144
+// buffer size: 137
+// _1,_2,_3,_4.F'*I�$I�$	@a,b,c.,heyhowyoudoin
+// ..^ x,y,z.�?�?_1,_2.�?�?012
 
-// Can regenerate the same data with the buffer, even though the requested type will have the field in a different order
-auto stuff_copy = deser<sort_desc<stuff_t>>(buffer.c_str());
-assert(stuff == stuff_copy);
+// Can regenerate the same data with the buffer, even though the requested type will have the fields in a different order
+using stuff_t = std::decay_t<decltype(stuff)>;
+auto deser_stuff = deser<sort_desc<stuff_t>>(buffer.c_str());
+assert(stuff == deser_stuff);
 
 // Construct a type that has a subset of the values, also in a different order
 auto less_stuff = clazz { 
-    arg _3 = clazz {
-        arg z = std::array {
-            clazz{arg z = 1.0/2.0}, 
-            clazz{arg z = 3.0/4.0}
+    let _4 = clz::cvector<clazz<var _2<std::string>>>(stuff._4)
+    let _3 = clazz {
+        let c = std::array {
+            clazz{let z = 1.0/2.0}, 
+            clazz{let z = 3.0/4.0}
         }
     },
-    arg _1 = 42
+    let _1 = 42
 };
 
-using sub_t = std::decay_t<decltype(less_stuff)>;
+// Can construct any super-type from the original binary serialised data
+using less_stuff_t = std::decay_t<decltype(less_stuff)>;
+auto deser_less_stuff = deser<less_stuff_t>(buffer.c_str());
+assert(less_stuff == deser_less_stuff);
 
-// Can construct any sub-type from the original serialised data
-auto deser_sub_from_full = deser<sub_t>(buffer.c_str());
-assert(less_stuff == deser_sub_from_full);
+// Add extra field to less_stuff_t, which is not in stuff_t
+using less_stuff_plus_t = build_clazz <
+    less_stuff_t,
+    ann(let transient = true)
+    var _5<std::string, []{ return "this is transient and won't be encoded"; }>
+>;
+
+less_stuff_plus_t less_stuff_plus = stuff;
+
+// As it has a default value, we are still able to use the same byte buffer
+// even though it is not encoded
+auto deser_less_stuff_plus = deser<less_stuff_plus_t>(buffer.c_str());
+assert(deser_less_stuff_plus == less_stuff_plus);
+
+// Serialising less_stuff_plus_t will contain no reference to field _5, or its value, since it is annotated transient
+auto buffer_no_5 = ser(less_stuff_plus);
+assert(buffer_no_5.find("_5") == std::string::npos);
+assert(buffer_no_5.find("transient") == std::string::npos);
 ```
